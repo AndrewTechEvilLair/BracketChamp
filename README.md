@@ -2,7 +2,7 @@
 
 A lightweight, single-file tournament bracket generator built for race events and competitions. No installation, no backend, no build step — just open the HTML file and run your tournament.
 
-[![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=AndrewTech&button_colour=5F7FFF&font_colour=ffffff&font_family=Inter&outline_colour=000000&coffee_colour=FFDD00)](https://www.buymeacoffee.com/AndrewTech)
+https://andrewtechevillair.github.io/BracketChamp/
 
 ---
 
