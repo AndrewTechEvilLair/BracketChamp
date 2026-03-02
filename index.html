@@ -19,7 +19,7 @@
 <body>
 <div id="app"></div>
 <script>
-const VERSION = 'V1.4';
+const VERSION = 'V1.6';
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 const state = {
@@ -278,6 +278,16 @@ function computeStandings(nb, gf) {
   return standings;
 }
 
+window.openGrandFinalPick = function(playerNum) {
+  // Called when user clicks a player in the inline Grand Final card
+  const wChamp = state.bracket.winners[state.bracket.rounds-1][0]?.winner;
+  const lbChamp = state.bracket.losers[state.bracket.losers.length-1][0]?.winner;
+  if (!wChamp || !lbChamp) return;
+  state.grandFinal = { wChampion: wChamp, lbChampion: lbChamp, winner:'' };
+  // Immediately confirm — no extra modal needed since the inline card is the confirmation UI
+  confirmGrandFinalWinner(playerNum);
+};
+
 window.confirmGrandFinalWinner = function(playerNum) {
   if (!state.grandFinal) return;
   const winner = playerNum === 1 ? state.grandFinal.wChampion : state.grandFinal.lbChampion;
@@ -305,9 +315,27 @@ function doSelectWinner(roundIndex, matchIndex, winner) {
     const nm = nb.winners[roundIndex+1][Math.floor(matchIndex/2)];
     if (matchIndex % 2 === 0) nm.player1 = winner; else nm.player2 = winner;
   }
-  if (nb.losers && loser && loser !== 'BYE' && loser !== '') {
+  // Only feed loser into LB if this is NOT the W-bracket final
+  // The W-final loser goes straight to the Grand Final
+  const isWFinal = roundIndex === nb.rounds - 1;
+  if (nb.losers && loser && loser !== 'BYE' && loser !== '' && !isWFinal) {
     feedLoser(nb, roundIndex, matchIndex, loser);
   }
+
+  // If W-bracket final just completed in double elim, check if LB champ exists -> Grand Final
+  if (nb.losers && isWFinal) {
+    const lbChamp = nb.losers.length > 0 && nb.losers[nb.losers.length-1][0]?.winner;
+    if (lbChamp) {
+      state.bracket = nb;
+      setTimeout(() => { state.grandFinal = { wChampion: winner, lbChampion: lbChamp, winner:'' }; render(); }, 100);
+      return;
+    }
+    // LB not done yet — store W-champ, Grand Final will trigger when LB finishes
+    state.bracket = nb;
+    render();
+    return;
+  }
+
   state.bracket = nb;
 
   if (roundIndex === nb.rounds - 1 && !nb.losers) {
@@ -764,7 +792,70 @@ function renderBracketScreen() {
     </div>`;
   }).join('');
 
-  // ── Losers bracket columns ──
+  // ── Grand Final column (double elim only) ──────────────────────────────────
+  if (b.losers) {
+    const gf = b.grandFinal;
+    const wChamp = b.winners[b.rounds-1][0] ? b.winners[b.rounds-1][0].winner || '' : '';
+    const lbChamp = b.losers.length > 0 && b.losers[b.losers.length-1][0] ? b.losers[b.losers.length-1][0].winner || '' : '';
+    const canClick = !gf || !gf.winner;
+    const gfBg = c('bg-gray-700','bg-yellow-50');
+
+    let p1Btn, p2Btn, winnerRow = '';
+
+    if (wChamp || lbChamp) {
+      const p1 = wChamp || '...';
+      const p2 = lbChamp || 'Awaiting LB';
+      const p1win = gf && gf.winner && gf.winner === p1;
+      const p2win = gf && gf.winner && gf.winner === p2;
+      const p1Ready = !!wChamp;
+      const p2Ready = !!lbChamp;
+
+      const p1Cls = p1win ? 'bg-green-100 border-green-500 font-bold text-green-900'
+        : (p1Ready && canClick) ? c('bg-gray-600 border-gray-500 text-gray-100 hover:bg-gray-500 cursor-pointer','bg-white border-gray-300 hover:bg-yellow-50 cursor-pointer')
+        : 'opacity-40 cursor-not-allowed ' + c('bg-gray-600 border-gray-500 text-gray-300','bg-white border-gray-200 text-gray-400');
+      const p2Cls = p2win ? 'bg-green-100 border-green-500 font-bold text-green-900'
+        : (p2Ready && canClick) ? c('bg-gray-600 border-gray-500 text-gray-100 hover:bg-gray-500 cursor-pointer','bg-white border-gray-300 hover:bg-yellow-50 cursor-pointer')
+        : 'opacity-40 cursor-not-allowed ' + c('bg-gray-600 border-gray-500 text-gray-300','bg-white border-gray-200 text-gray-400');
+
+      p1Btn = '<div class="text-xs ' + c('text-blue-400','text-blue-600') + ' mb-1 font-semibold">W Bracket Champion</div>'
+        + '<button ' + (canClick && p1Ready ? 'onclick="openGrandFinalPick(1)"' : 'disabled') + ' class="w-full p-2 rounded border-2 text-sm text-left touch-manipulation mb-2 ' + p1Cls + '">'
+        + esc(p1) + (p1win ? ' ✓' : '') + '</button>';
+
+      p2Btn = '<div class="text-center text-xs ' + c('text-gray-500','text-gray-400') + ' my-1">VS</div>'
+        + '<div class="text-xs ' + c('text-red-400','text-red-600') + ' mb-1 font-semibold">LB Champion</div>'
+        + '<button ' + (canClick && p2Ready ? 'onclick="openGrandFinalPick(2)"' : 'disabled') + ' class="w-full p-2 rounded border-2 text-sm text-left touch-manipulation ' + p2Cls + '">'
+        + esc(p2) + (p2win ? ' ✓' : '') + '</button>';
+
+      if (gf && gf.winner) {
+        winnerRow = '<div class="mt-3 text-center"><div class="text-xs font-bold text-green-600">CHAMPION</div>'
+          + '<div class="text-sm font-bold text-green-700">' + esc(gf.winner) + ' 🏆</div></div>';
+      }
+
+      const gfCard = '<div class="border-2 border-yellow-400 rounded-lg p-3 ' + gfBg + ' w-full shadow-lg">'
+        + '<div class="text-xs font-bold text-yellow-600 mb-3 text-center">⚔️ GRAND FINAL</div>'
+        + p1Btn + p2Btn + winnerRow + '</div>';
+
+      const gfTop = Math.max(0, (totalHeight / 2) - 130);
+      wCols += '<div class="flex flex-col flex-shrink-0" style="width:220px;">'
+        + '<div class="bg-yellow-500 text-white px-4 py-2 rounded-t-lg text-center font-bold text-sm">Grand Final</div>'
+        + '<div class="relative border-l-4 border-r-4 border-yellow-300" style="height:' + totalHeight + 'px;">'
+        + '<div class="absolute" style="top:' + gfTop + 'px;left:8px;right:8px;">' + gfCard + '</div>'
+        + '</div></div>';
+    } else {
+      // Placeholder before either champ is ready
+      const placeholder = '<div class="border-2 border-dashed border-yellow-300 rounded-lg p-4 text-center opacity-40">'
+        + '<div class="text-2xl mb-1">🏆</div>'
+        + '<div class="text-xs ' + c('text-gray-400','text-gray-500') + '">Grand Final<br>Awaiting champions</div></div>';
+      const gfTop = Math.max(0, (totalHeight / 2) - 80);
+      wCols += '<div class="flex flex-col flex-shrink-0" style="width:220px;">'
+        + '<div class="bg-yellow-500 text-white px-4 py-2 rounded-t-lg text-center font-bold text-sm">Grand Final</div>'
+        + '<div class="relative border-l-4 border-r-4 border-yellow-300" style="height:' + totalHeight + 'px;">'
+        + '<div class="absolute" style="top:' + gfTop + 'px;left:8px;right:8px;">' + placeholder + '</div>'
+        + '</div></div>';
+    }
+  }
+
+    // ── Losers bracket columns ──
   let lbSection = '';
   if (b.losers && b.losers.length > 0) {
     const lbFirstCount = b.losers[0].length;
@@ -794,18 +885,8 @@ function renderBracketScreen() {
     </div>`;
   }
 
-  // ── Grand Final section (if double elim and both champs decided) ──
+  // Grand Final is now rendered inline in the Winners Bracket columns above
   let grandFinalSection = '';
-  if (b.grandFinal && b.grandFinal.winner) {
-    grandFinalSection = `
-    <div class="${card()} rounded-lg shadow-lg p-6 mb-6 border-4 border-yellow-400">
-      <h2 class="text-xl font-bold text-center text-yellow-600 mb-4">🏆 Grand Final Result</h2>
-      <div class="text-center">
-        <div class="text-2xl font-bold ${txt()}">${esc(b.grandFinal.winner)}</div>
-        <div class="text-green-600 font-semibold">Tournament Champion!</div>
-      </div>
-    </div>`;
-  }
 
   // ── Modals ──
   let modals = '';
@@ -850,31 +931,7 @@ function renderBracketScreen() {
     </div>`;
   }
 
-  // Grand Final pick modal
-  if (state.grandFinal && !state.grandFinal.winner) {
-    modals += `
-    <div class="modal-backdrop">
-      <div class="${card()} rounded-xl shadow-2xl p-6 max-w-md w-full">
-        <div class="text-center mb-6">
-          <div class="text-5xl mb-2">🏆</div>
-          <h2 class="text-2xl font-bold ${txt()}">GRAND FINAL</h2>
-          <p class="text-sm ${c('text-gray-400','text-gray-500')} mt-1">Winners Bracket Champion vs Losers Bracket Champion</p>
-        </div>
-        <div class="space-y-3 mb-4">
-          <button onclick="confirmGrandFinalWinner(1)" class="w-full p-4 rounded-lg border-2 text-left font-semibold transition-all hover:border-yellow-400 ${c('bg-gray-700 border-gray-500 text-gray-100','bg-white border-gray-300')}">
-            <span class="text-xs text-blue-500 block mb-1">Winners Bracket Champion</span>
-            ${esc(state.grandFinal.wChampion)}
-          </button>
-          <div class="text-center text-sm font-bold ${c('text-gray-500','text-gray-400')}">VS</div>
-          <button onclick="confirmGrandFinalWinner(2)" class="w-full p-4 rounded-lg border-2 text-left font-semibold transition-all hover:border-yellow-400 ${c('bg-gray-700 border-gray-500 text-gray-100','bg-white border-gray-300')}">
-            <span class="text-xs text-red-500 block mb-1">Losers Bracket Champion</span>
-            ${esc(state.grandFinal.lbChampion)}
-          </button>
-        </div>
-        <p class="text-xs text-center ${c('text-gray-500','text-gray-400')}">Click the winner to complete the tournament</p>
-      </div>
-    </div>`;
-  }
+  // Grand Final is handled inline in the bracket — no modal needed
 
   // Final Standings modal
   if (state.showStandingsModal && state.finalStandings) {
@@ -909,14 +966,31 @@ function renderBracketScreen() {
     </div>`;
   }
 
-  // Champion banner
-  const champBanner = (b.grandFinal?.winner || (!b.losers && b.winners[b.rounds-1][0]?.winner))
-    ? `<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 no-print">
-        <div class="bg-yellow-400 text-gray-900 px-6 py-3 rounded-full shadow-2xl font-bold text-lg">
-          🏆 Champion: ${esc(b.grandFinal?.winner || b.winners[b.rounds-1][0]?.winner)}
-        </div>
-       </div>`
-    : '';
+  // Podium banner — top 3 shown at top of bracket page when available
+  let champBanner = '';
+  if (b.finalStandings && b.finalStandings.length > 0) {
+    const top3 = b.finalStandings.slice(0, 3);
+    const medals = ['🥇','🥈','🥉'];
+    const podiumCards = top3.map(function(e, i) {
+      const isChamp = i === 0;
+      const bg2 = isChamp
+        ? 'background:' + (state.darkMode ? '#78350f' : '#fef9c3') + ';border:2px solid #f59e0b;'
+        : (state.darkMode ? 'background:#374151;border:1px solid #4b5563;' : 'background:#f9fafb;border:1px solid #e5e7eb;');
+      return '<div style="' + bg2 + 'border-radius:0.75rem;padding:0.75rem 1rem;display:flex;align-items:center;gap:0.5rem;min-width:' + (isChamp?'180px':'150px') + ';">'
+        + '<span style="font-size:' + (isChamp?'1.75rem':'1.25rem') + ';">' + medals[i] + '</span>'
+        + '<div>'
+        + '<div style="font-size:' + (isChamp?'0.95rem':'0.8rem') + ';font-weight:700;color:' + (state.darkMode?'#f9fafb':'#111827') + ';">' + esc(e.player) + '</div>'
+        + '<div style="font-size:0.65rem;color:#6b7280;">' + (isChamp ? 'Champion' : i===1 ? '2nd Place' : '3rd Place') + '</div>'
+        + '</div></div>';
+    }).join('');
+    champBanner = '<div class="no-print" style="background:' + (state.darkMode?'#1f2937':'#fff');
+    champBanner += ';border-bottom:' + (state.darkMode?'1px solid #374151':'1px solid #e5e7eb') + ';padding:0.75rem 1rem;">';
+    champBanner += '<div style="max-width:80rem;margin:0 auto;">';
+    champBanner += '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">';
+    champBanner += '<span style="font-size:0.75rem;font-weight:600;color:#6b7280;margin-right:0.25rem;">RESULTS</span>';
+    champBanner += podiumCards;
+    champBanner += '</div></div></div>';
+  }
 
   // Export dropdown
   const exportDropdown = state.showExportDropdown ? `
@@ -933,6 +1007,8 @@ function renderBracketScreen() {
 
   return `
   <div class="min-h-screen ${c('bg-gray-900','bg-gray-50')}">
+
+    ${champBanner}
 
     <!-- Header -->
     <div class="no-print ${card()} shadow-sm border-b p-4 mb-6">
@@ -975,7 +1051,6 @@ function renderBracketScreen() {
     </div>
 
     ${modals}
-    ${champBanner}
   </div>`;
 }
 
