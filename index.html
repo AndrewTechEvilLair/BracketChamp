@@ -1,1476 +1,1006 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Users, Printer, Trophy, RotateCcw, Plus, Minus, Download, Save, Upload, Undo, Clock, Share2, Moon, Sun, Settings, Trash2, Copy, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
-
-const BracketRacingApp = () => {
-  const [participants, setParticipants] = useState(['']);
-  const [bracket, setBracket] = useState(null);
-  const [includeLosers, setIncludeLosers] = useState(false);
-  const [customBracketSize, setCustomBracketSize] = useState('');
-  const [tournamentName, setTournamentName] = useState('');
-  const [seedingMode, setSeedingMode] = useState('random');
-  const [darkMode, setDarkMode] = useState(false);
-  const [history, setHistory] = useState([]);
-  const [bracketFormat, setBracketFormat] = useState('single');
-  const [bestOf, setBestOf] = useState(1);
-  const [showSettings, setShowSettings] = useState(false);
-  const [shareLink, setShareLink] = useState('');
-  const [fullScreenMode, setFullScreenMode] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
-  const [currentRound, setCurrentRound] = useState(0);
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const printRef = useRef();
-  const touchStartX = useRef(0);
-
-  // Detect screen size changes
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Auto-save to localStorage
-  useEffect(() => {
-    const saveState = () => {
-      const state = {
-        participants,
-        bracket,
-        tournamentName,
-        seedingMode,
-        darkMode,
-        bracketFormat,
-        bestOf,
-        timestamp: new Date().toISOString()
-      };
-      localStorage.setItem('bracketRacingState', JSON.stringify(state));
-    };
-    
-    const timer = setTimeout(saveState, 1000);
-    return () => clearTimeout(timer);
-  }, [participants, bracket, tournamentName, seedingMode, darkMode, bracketFormat, bestOf]);
-
-  // Load saved state on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('bracketRacingState');
-    if (saved) {
-      try {
-        const state = JSON.parse(saved);
-        setParticipants(state.participants || ['']);
-        setTournamentName(state.tournamentName || '');
-        setSeedingMode(state.seedingMode || 'random');
-        setDarkMode(state.darkMode || false);
-        setBracketFormat(state.bracketFormat || 'single');
-        setBestOf(state.bestOf || 1);
-      } catch (e) {
-        console.error('Error loading saved state:', e);
-      }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>BracketChamp</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      .print-only { display: block !important; }
+      body { margin: 0; }
     }
-  }, []);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyPress = (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'e') {
-          e.preventDefault();
-          exportResults();
-        } else if (e.key === 'p') {
-          e.preventDefault();
-          handlePrint();
-        } else if (e.key === 's') {
-          e.preventDefault();
-          saveTournament();
-        } else if (e.key === 'z') {
-          e.preventDefault();
-          undoLastAction();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [bracket, history]);
-
-  // Touch swipe for round navigation
-  const handleTouchStart = (e) => {
-    touchStartX.current = e.touches[0].clientX;
-  };
-
-  const handleTouchEnd = (e) => {
-    const touchEndX = e.changedTouches[0].clientX;
-    const diff = touchStartX.current - touchEndX;
-    
-    if (Math.abs(diff) > 50) { // Minimum swipe distance
-      if (diff > 0 && currentRound < bracket.rounds - 1) {
-        setCurrentRound(currentRound + 1);
-      } else if (diff < 0 && currentRound > 0) {
-        setCurrentRound(currentRound - 1);
-      }
-    }
-  };
-
-  const addParticipant = () => {
-    if (participants.length < 32) {
-      setParticipants([...participants, '']);
-    }
-  };
-
-  const removeParticipant = (index) => {
-    const newParticipants = participants.filter((_, i) => i !== index);
-    setParticipants(newParticipants.length === 0 ? [''] : newParticipants);
-  };
-
-  const updateParticipant = (index, value) => {
-    const newParticipants = [...participants];
-    newParticipants[index] = value;
-    setParticipants(newParticipants);
-  };
-
-  const shuffleArray = (array) => {
-    const shuffled = [...array];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled;
-  };
-
-  const generateBracket = (blank32 = false, customSize = null) => {
-    let filledParticipants;
-    let bracketSize;
-    
-    if (customSize) {
-      const size = parseInt(customSize);
-      if (isNaN(size) || size < 2 || size > 64) {
-        alert('Please enter a valid number between 2 and 64');
-        return;
-      }
-      bracketSize = size;
-      filledParticipants = Array(bracketSize).fill('').map((_, i) => `Racer ${i + 1}`);
-    } else if (blank32) {
-      filledParticipants = Array(32).fill('').map((_, i) => `Racer ${i + 1}`);
-      bracketSize = 32;
-    } else {
-      const validParticipants = participants.filter(p => p && p.trim() !== '');
-      if (validParticipants.length < 2) {
-        alert('Please enter at least 2 participants');
-        return;
-      }
-
-      if (seedingMode === 'random') {
-        filledParticipants = shuffleArray(validParticipants);
-      } else {
-        filledParticipants = [...validParticipants];
-      }
-      
-      bracketSize = filledParticipants.length;
-    }
-
-    const rounds = Math.ceil(Math.log2(bracketSize));
-    const perfectBracketSize = Math.pow(2, rounds);
-    
-    const byesNeeded = perfectBracketSize - filledParticipants.length;
-    for (let i = 0; i < byesNeeded; i++) {
-      filledParticipants.push('BYE');
-    }
-    
-    if (byesNeeded > 0 && !blank32 && !customSize && seedingMode === 'random') {
-      filledParticipants = shuffleArray(filledParticipants);
-    }
-
-    const winnersBracket = [];
-    
-    const firstRound = [];
-    for (let i = 0; i < filledParticipants.length; i += 2) {
-      firstRound.push({
-        match: Math.floor(i/2) + 1,
-        player1: filledParticipants[i],
-        player2: filledParticipants[i + 1],
-        winner: '',
-        timestamp: null,
-        notes: '',
-        scores: Array(bestOf).fill({ p1: '', p2: '' })
-      });
-    }
-    winnersBracket.push(firstRound);
-
-    for (let round = 1; round < rounds; round++) {
-      const currentRound = [];
-      const matchCount = Math.pow(2, rounds - round - 1);
-      for (let i = 0; i < matchCount; i++) {
-        currentRound.push({
-          match: i + 1,
-          player1: '',
-          player2: '',
-          winner: '',
-          timestamp: null,
-          notes: '',
-          scores: Array(bestOf).fill({ p1: '', p2: '' })
-        });
-      }
-      winnersBracket.push(currentRound);
-    }
-
-    const newBracket = {
-      winners: winnersBracket,
-      losers: includeLosers ? generateLosersBracket(rounds) : null,
-      rounds: rounds,
-      isBlank32: blank32,
-      isCustom: !!customSize,
-      customSize: customSize ? parseInt(customSize) : null,
-      isRandomized: !blank32 && !customSize && seedingMode === 'random',
-      participantCount: bracketSize,
-      name: tournamentName || 'Unnamed Tournament',
-      createdAt: new Date().toISOString()
-    };
-
-    setBracket(newBracket);
-    setHistory([]);
-    setCurrentRound(0);
-    
-    if (customSize) {
-      setCustomBracketSize('');
-    }
-  };
-
-  const generateLosersBracket = (rounds) => {
-    const loserRounds = [];
-    for (let i = 0; i < rounds - 1; i++) {
-      loserRounds.push([]);
-    }
-    return loserRounds;
-  };
-
-  const backToEntry = () => {
-    setBracket(null);
-    setShowMobileMenu(false);
-  };
-
-  const clearAllParticipants = () => {
-    if (confirm('Are you sure you want to reset everything? This cannot be undone.')) {
-      setParticipants(['']);
-      setBracket(null);
-      setHistory([]);
-      setTournamentName('');
-      localStorage.removeItem('bracketRacingState');
-    }
-  };
-
-  const selectWinner = (roundIndex, matchIndex, winner) => {
-    if (roundIndex === bracket.rounds - 1) {
-      if (!confirm('This is the final match! Selecting a winner will complete the tournament. Are you sure?')) {
-        return;
-      }
-    }
-
-    setHistory([...history, JSON.parse(JSON.stringify(bracket))]);
-
-    const newBracket = { ...bracket };
-    const currentMatch = newBracket.winners[roundIndex][matchIndex];
-    
-    currentMatch.winner = winner;
-    currentMatch.timestamp = new Date().toISOString();
-    
-    // Haptic feedback on mobile
-    if (navigator.vibrate) {
-      navigator.vibrate(50);
-    }
-    
-    if (roundIndex < newBracket.rounds - 1) {
-      const nextRoundIndex = roundIndex + 1;
-      const nextMatchIndex = Math.floor(matchIndex / 2);
-      const nextMatch = newBracket.winners[nextRoundIndex][nextMatchIndex];
-      
-      if (matchIndex % 2 === 0) {
-        nextMatch.player1 = winner;
-      } else {
-        nextMatch.player2 = winner;
-      }
-    }
-    
-    setBracket(newBracket);
-    
-    if (roundIndex === newBracket.rounds - 1) {
-      setTimeout(() => exportResults(newBracket), 100);
-    }
-  };
-
-  const undoLastAction = () => {
-    if (history.length > 0) {
-      const previousState = history[history.length - 1];
-      setBracket(previousState);
-      setHistory(history.slice(0, -1));
-    }
-  };
-
-  const clearWinner = (roundIndex, matchIndex) => {
-    setHistory([...history, JSON.parse(JSON.stringify(bracket))]);
-    
-    const newBracket = { ...bracket };
-    const currentMatch = newBracket.winners[roundIndex][matchIndex];
-    
-    currentMatch.winner = '';
-    currentMatch.timestamp = null;
-    
-    setBracket(newBracket);
-  };
-
-  const updateMatchNotes = (roundIndex, matchIndex, notes) => {
-    const newBracket = { ...bracket };
-    newBracket.winners[roundIndex][matchIndex].notes = notes;
-    setBracket(newBracket);
-  };
-
-  const handlePrint = () => {
-    window.print();
-  };
-
-  const getRoundName = (roundIndex, totalRounds) => {
-    const remaining = totalRounds - roundIndex;
-    if (remaining === 1) return 'Final';
-    if (remaining === 2) return 'Semi-Final';
-    if (remaining === 3) return 'Quarter-Final';
-    return `Round ${roundIndex + 1}`;
-  };
-
-  const populateTestData = () => {
-    const cartoonCharacters = [
-      'Mickey Mouse', 'Bugs Bunny', 'SpongeBob', 'Homer Simpson',
-      'Scooby-Doo', 'Tom Cat', 'Jerry Mouse', 'Donald Duck',
-      'Bart Simpson', 'Patrick Star', 'Tweety Bird', 'Road Runner',
-      'Daffy Duck', 'Porky Pig', 'Goofy', 'Pluto',
-      'Woody Woodpecker', 'Fred Flintstone', 'Barney Rubble', 'Yogi Bear',
-      'Peter Griffin', 'Stewie Griffin', 'Eric Cartman', 'Kenny McCormick',
-      'Pikachu', 'Garfield', 'Sonic', 'Mario',
-      'Luigi', 'Popeye', 'Betty Boop', 'Felix the Cat'
-    ];
-    setParticipants(cartoonCharacters);
-  };
-
-  const importParticipants = () => {
-    const input = prompt('Paste participant names (one per line or comma-separated):');
-    if (input) {
-      const names = input.split(/[,\n]/).map(n => n.trim()).filter(n => n);
-      setParticipants(names.slice(0, 32));
-    }
-  };
-
-  const exportResults = (bracketData = null, format = 'txt') => {
-    const activeBracket = bracketData || bracket;
-    if (!activeBracket) return;
-
-    const results = {};
-    
-    activeBracket.winners.forEach((round, roundIndex) => {
-      const roundName = getRoundName(roundIndex, activeBracket.rounds);
-      
-      round.forEach((match) => {
-        const player1 = match.player1;
-        const player2 = match.player2;
-        
-        if (!player1 || !player2 || player1 === 'TBD' || player2 === 'TBD' || 
-            player1 === 'BYE' || player2 === 'BYE') {
-          return;
-        }
-        
-        if (!results[player1]) {
-          results[player1] = [];
-        }
-        if (!results[player2]) {
-          results[player2] = [];
-        }
-        
-        if (match.winner) {
-          const result1 = match.winner === player1 ? 'W' : 'L';
-          const result2 = match.winner === player2 ? 'W' : 'L';
-          
-          results[player1].push({
-            round: roundName,
-            match: match.match,
-            opponent: player2,
-            result: result1,
-            timestamp: match.timestamp,
-            notes: match.notes
-          });
-          
-          results[player2].push({
-            round: roundName,
-            match: match.match,
-            opponent: player1,
-            result: result2,
-            timestamp: match.timestamp,
-            notes: match.notes
-          });
-        }
-      });
-    });
-
-    if (format === 'csv') {
-      exportCSV(results, activeBracket);
-    } else if (format === 'json') {
-      exportJSON(activeBracket);
-    } else {
-      exportTXT(results, activeBracket);
-    }
-    
-    setShowExportMenu(false);
-  };
-
-  const exportTXT = (results, activeBracket) => {
-    let output = '='.repeat(60) + '\n';
-    output += `${activeBracket.name.toUpperCase()}\n`;
-    output += 'BRACKET RACING TOURNAMENT RESULTS\n';
-    output += '='.repeat(60) + '\n\n';
-    output += `Generated: ${new Date().toLocaleString()}\n`;
-    output += `Tournament Date: ${new Date(activeBracket.createdAt).toLocaleDateString()}\n\n`;
-
-    const racerNames = Object.keys(results).sort();
-    
-    racerNames.forEach(racer => {
-      const races = results[racer];
-      if (races.length === 0) return;
-      
-      output += '-'.repeat(60) + '\n';
-      output += `Racer: ${racer}\n`;
-      output += '-'.repeat(60) + '\n';
-      
-      races.forEach((race, index) => {
-        output += `${index + 1}. ${race.round} - Match ${race.match}\n`;
-        output += `   vs ${race.opponent}\n`;
-        output += `   Result: ${race.result === 'W' ? 'WIN' : 'LOSS'} (${race.result})\n`;
-        if (race.timestamp) {
-          output += `   Time: ${new Date(race.timestamp).toLocaleString()}\n`;
-        }
-        if (race.notes) {
-          output += `   Notes: ${race.notes}\n`;
-        }
-        output += '\n';
-      });
-      
-      const wins = races.filter(r => r.result === 'W').length;
-      const losses = races.filter(r => r.result === 'L').length;
-      output += `Summary: ${wins}W - ${losses}L\n\n`;
-    });
-
-    const blob = new Blob([output], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${activeBracket.name.replace(/\s+/g, '-')}-results-${new Date().toISOString().slice(0,10)}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const exportCSV = (results, activeBracket) => {
-    let csv = 'Racer,Round,Match,Opponent,Result,Timestamp,Notes\n';
-    
-    Object.keys(results).sort().forEach(racer => {
-      results[racer].forEach(race => {
-        csv += `"${racer}","${race.round}",${race.match},"${race.opponent}","${race.result}","${race.timestamp || ''}","${race.notes || ''}"\n`;
-      });
-    });
-
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${activeBracket.name.replace(/\s+/g, '-')}-results-${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const exportJSON = (activeBracket) => {
-    const json = JSON.stringify(activeBracket, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${activeBracket.name.replace(/\s+/g, '-')}-bracket-${new Date().toISOString().slice(0,10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const saveTournament = () => {
-    if (!bracket) {
-      alert('No tournament to save!');
-      return;
-    }
-
-    const saveData = {
-      bracket,
-      participants,
-      tournamentName,
-      savedAt: new Date().toISOString()
-    };
-
-    const json = JSON.stringify(saveData, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${bracket.name.replace(/\s+/g, '-')}-save-${new Date().toISOString().slice(0,10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    alert('Tournament saved!');
-  };
-
-  const loadTournament = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const saveData = JSON.parse(e.target.result);
-        setBracket(saveData.bracket);
-        setParticipants(saveData.participants);
-        setTournamentName(saveData.tournamentName);
-        alert('Tournament loaded successfully!');
-      } catch (error) {
-        alert('Error loading tournament file');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const generateShareLink = () => {
-    const data = btoa(JSON.stringify({ bracket, tournamentName }));
-    const link = `${window.location.origin}${window.location.pathname}?shared=${data}`;
-    setShareLink(link);
-    navigator.clipboard.writeText(link);
-    alert('Share link copied to clipboard!');
-  };
-
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-  };
-
-  const bgClass = darkMode ? 'bg-gray-900' : 'bg-gray-50';
-  const textClass = darkMode ? 'text-gray-100' : 'text-gray-800';
-  const cardBgClass = darkMode ? 'bg-gray-800' : 'bg-white';
-  const borderClass = darkMode ? 'border-gray-700' : 'border-gray-300';
-
-  // Mobile Menu Component
-  const MobileMenu = () => (
-    <div className={`fixed inset-0 ${darkMode ? 'bg-gray-900' : 'bg-white'} z-50 overflow-y-auto`}>
-      <div className="p-4">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className={`text-xl font-bold ${textClass}`}>Menu</h2>
-          <button onClick={() => setShowMobileMenu(false)} className="p-2">
-            <X size={24} className={textClass} />
-          </button>
-        </div>
-        
-        <div className="space-y-3">
-          <button
-            onClick={() => { backToEntry(); }}
-            className="w-full bg-gray-600 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Users size={20} />
-            <span>Back to Entry</span>
-          </button>
-          
-          <button
-            onClick={() => { undoLastAction(); setShowMobileMenu(false); }}
-            disabled={history.length === 0}
-            className="w-full bg-orange-600 disabled:bg-gray-400 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Undo size={20} />
-            <span>Undo Last Action</span>
-          </button>
-          
-          <button
-            onClick={() => { saveTournament(); setShowMobileMenu(false); }}
-            className="w-full bg-green-600 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Save size={20} />
-            <span>Save Tournament</span>
-          </button>
-          
-          <button
-            onClick={() => { generateShareLink(); setShowMobileMenu(false); }}
-            className="w-full bg-blue-600 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Share2 size={20} />
-            <span>Share Tournament</span>
-          </button>
-          
-          <button
-            onClick={() => setShowExportMenu(!showExportMenu)}
-            className="w-full bg-purple-600 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Download size={20} />
-            <span>Export Results</span>
-          </button>
-          
-          {showExportMenu && (
-            <div className="pl-4 space-y-2">
-              <button
-                onClick={() => { exportResults(bracket, 'txt'); setShowMobileMenu(false); }}
-                className="w-full bg-purple-500 text-white p-3 rounded-lg text-left"
-              >
-                Export as Text (.txt)
-              </button>
-              <button
-                onClick={() => { exportResults(bracket, 'csv'); setShowMobileMenu(false); }}
-                className="w-full bg-purple-500 text-white p-3 rounded-lg text-left"
-              >
-                Export as CSV (.csv)
-              </button>
-              <button
-                onClick={() => { exportResults(bracket, 'json'); setShowMobileMenu(false); }}
-                className="w-full bg-purple-500 text-white p-3 rounded-lg text-left"
-              >
-                Export as JSON (.json)
-              </button>
-            </div>
-          )}
-          
-          <button
-            onClick={() => { handlePrint(); setShowMobileMenu(false); }}
-            className="w-full bg-blue-500 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <Printer size={20} />
-            <span>Print Bracket</span>
-          </button>
-          
-          <button
-            onClick={() => { toggleDarkMode(); setShowMobileMenu(false); }}
-            className="w-full bg-gray-700 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
-            <span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
-          </button>
-          
-          <button
-            onClick={() => { clearAllParticipants(); }}
-            className="w-full bg-red-600 text-white p-4 rounded-lg flex items-center gap-3 text-left"
-          >
-            <RotateCcw size={20} />
-            <span>Reset All</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (bracket && fullScreenMode) {
-    const matchHeight = 200;
-    const baseGap = 16;
-    const totalHeight = Math.pow(2, bracket.rounds) * matchHeight;
-
-    return (
-      <div className={`min-h-screen ${bgClass} p-4 md:p-8`}>
-        <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-6">
-            <h1 className={`text-2xl md:text-4xl font-bold ${textClass}`}>
-              {bracket.name}
-            </h1>
-            <button
-              onClick={() => setFullScreenMode(false)}
-              className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 md:px-4 md:py-2 rounded-lg text-sm md:text-base"
-            >
-              Exit
-            </button>
-          </div>
-          
-          <div className="overflow-x-auto pb-8">
-            <div className="flex gap-4 md:gap-8 min-w-max">
-              {bracket.winners.map((round, roundIndex) => (
-                <div key={roundIndex} className="flex flex-col">
-                  <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-3 py-2 md:px-4 md:py-3 rounded-t-lg text-center font-bold text-sm md:text-lg">
-                    {getRoundName(roundIndex, bracket.rounds)}
-                  </div>
-                  <div className="relative border-l-4 border-r-4 border-blue-200 px-2" style={{ height: `${totalHeight}px`, minWidth: isMobile ? '180px' : '220px' }}>
-                    {round.map((match, matchIndex) => {
-                      if ((!match.player1 || match.player1 === 'TBD' || match.player1 === '') && 
-                          (!match.player2 || match.player2 === 'TBD' || match.player2 === '')) {
-                        return null;
-                      }
-
-                      let topPosition = 0;
-                      
-                      if (roundIndex === 0) {
-                        topPosition = matchIndex * (matchHeight + baseGap);
-                      } else {
-                        const spacing = Math.pow(2, roundIndex);
-                        const offset = (spacing * (matchHeight + baseGap)) / 2;
-                        topPosition = matchIndex * spacing * (matchHeight + baseGap) + offset - (matchHeight / 2);
-                      }
-                      
-                      return (
-                        <div 
-                          key={matchIndex}
-                          className="absolute"
-                          style={{ top: `${topPosition}px` }}
-                        >
-                          <div className={`border ${borderClass} rounded-lg p-3 md:p-4 ${cardBgClass} shadow-lg`} style={{ minWidth: isMobile ? '160px' : '200px' }}>
-                            <div className={`text-xs md:text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'} mb-2 font-bold`}>Match {match.match}</div>
-                            <div className="space-y-2 md:space-y-3">
-                              <div className={`p-2 md:p-3 rounded border-2 text-sm md:text-lg font-semibold ${
-                                match.winner === match.player1
-                                  ? 'bg-green-100 border-green-500 text-green-900'
-                                  : darkMode ? 'bg-gray-700 border-gray-600 text-gray-100' : 'bg-white border-gray-300'
-                              }`}>
-                                <div className="truncate">{match.player1 || 'TBD'}</div>
-                                {match.winner === match.player1 && (
-                                  <span className="ml-2 text-green-600">👑</span>
-                                )}
-                              </div>
-                              <div className="text-center text-xs text-gray-400">VS</div>
-                              <div className={`p-2 md:p-3 rounded border-2 text-sm md:text-lg font-semibold ${
-                                match.winner === match.player2
-                                  ? 'bg-green-100 border-green-500 text-green-900'
-                                  : darkMode ? 'bg-gray-700 border-gray-600 text-gray-100' : 'bg-white border-gray-300'
-                              }`}>
-                                <div className="truncate">{match.player2 || 'TBD'}</div>
-                                {match.winner === match.player2 && (
-                                  <span className="ml-2 text-green-600">👑</span>
-                                )}
-                              </div>
-                            </div>
-                            {match.winner && (
-                              <div className="mt-2 md:mt-3 text-center">
-                                <div className="text-xs md:text-sm font-bold text-green-600">WINNER</div>
-                                <div className="text-sm md:text-lg font-bold text-green-700 truncate">{match.winner}</div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (bracket) {
-    const matchHeight = 200;
-    const baseGap = 16;
-    const totalHeight = Math.pow(2, bracket.rounds) * matchHeight;
-
-    return (
-      <div className={`min-h-screen ${bgClass}`}>
-        {showMobileMenu && <MobileMenu />}
-        
-        {/* Mobile Header */}
-        {isMobile ? (
-          <div className={`no-print ${cardBgClass} shadow-sm border-b p-4 sticky top-0 z-40`}>
-            <div className="flex justify-between items-center">
-              <h1 className={`text-lg font-bold ${textClass} truncate flex-1`}>
-                {bracket.name}
-              </h1>
-              <button
-                onClick={() => setShowMobileMenu(true)}
-                className="ml-2 p-2 bg-blue-600 text-white rounded-lg"
-              >
-                <Menu size={24} />
-              </button>
-            </div>
-            
-            {/* Round Navigation */}
-            <div className="flex items-center justify-between mt-3 gap-2">
-              <button
-                onClick={() => setCurrentRound(Math.max(0, currentRound - 1))}
-                disabled={currentRound === 0}
-                className="p-2 bg-gray-600 disabled:bg-gray-400 text-white rounded-lg"
-              >
-                <ChevronLeft size={20} />
-              </button>
-              
-              <div className={`flex-1 text-center font-semibold ${textClass}`}>
-                {getRoundName(currentRound, bracket.rounds)}
-              </div>
-              
-              <button
-                onClick={() => setCurrentRound(Math.min(bracket.rounds - 1, currentRound + 1))}
-                disabled={currentRound === bracket.rounds - 1}
-                className="p-2 bg-gray-600 disabled:bg-gray-400 text-white rounded-lg"
-              >
-                <ChevronRight size={20} />
-              </button>
-            </div>
-            
-            {/* Round Dots */}
-            <div className="flex justify-center gap-2 mt-2">
-              {Array.from({ length: bracket.rounds }).map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentRound(i)}
-                  className={`w-2 h-2 rounded-full ${i === currentRound ? 'bg-blue-600' : 'bg-gray-400'}`}
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
-          /* Desktop Header */
-          <div className={`no-print ${cardBgClass} shadow-sm border-b p-4 mb-6`}>
-            <div className="max-w-6xl mx-auto flex justify-between items-center flex-wrap gap-2">
-              <h1 className={`text-2xl font-bold ${textClass} flex items-center gap-2`}>
-                <Trophy className="text-yellow-500" />
-                {bracket.name}
-              </h1>
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  onClick={toggleDarkMode}
-                  className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                  title="Toggle Dark Mode"
-                >
-                  {darkMode ? <Sun size={16} /> : <Moon size={16} />}
-                </button>
-                <button
-                  onClick={() => setFullScreenMode(true)}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg transition-colors"
-                  title="Full Screen View"
-                >
-                  Full Screen
-                </button>
-                <button
-                  onClick={undoLastAction}
-                  disabled={history.length === 0}
-                  className="bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                  title="Undo (Ctrl+Z)"
-                >
-                  <Undo size={16} />
-                </button>
-                <button
-                  onClick={backToEntry}
-                  className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                >
-                  <Users size={16} />
-                  Back
-                </button>
-                <button
-                  onClick={saveTournament}
-                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                  title="Save Tournament (Ctrl+S)"
-                >
-                  <Save size={16} />
-                </button>
-                <button
-                  onClick={generateShareLink}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                >
-                  <Share2 size={16} />
-                </button>
-                <div className="relative group">
-                  <button
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                    title="Export Results (Ctrl+E)"
-                  >
-                    <Download size={16} />
-                    Export ▾
-                  </button>
-                  <div className="absolute right-0 mt-1 hidden group-hover:block bg-white shadow-lg rounded-lg overflow-hidden z-10">
-                    <button
-                      onClick={() => exportResults(bracket, 'txt')}
-                      className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                    >
-                      Text (.txt)
-                    </button>
-                    <button
-                      onClick={() => exportResults(bracket, 'csv')}
-                      className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                    >
-                      CSV (.csv)
-                    </button>
-                    <button
-                      onClick={() => exportResults(bracket, 'json')}
-                      className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                    >
-                      JSON (.json)
-                    </button>
-                  </div>
-                </div>
-                <button
-                  onClick={handlePrint}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                  title="Print (Ctrl+P)"
-                >
-                  <Printer size={16} />
-                </button>
-                <button
-                  onClick={clearAllParticipants}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
-                >
-                  <RotateCcw size={16} />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {shareLink && (
-          <div className={`max-w-6xl mx-auto mb-4 p-4 ${cardBgClass} rounded-lg shadow mx-4`}>
-            <div className="flex items-center gap-2 flex-col sm:flex-row">
-              <Share2 className="text-blue-500" size={20} />
-              <span className={textClass}>Share Link:</span>
-              <input 
-                type="text" 
-                value={shareLink} 
-                readOnly 
-                className="flex-1 p-2 border rounded text-sm w-full"
-              />
-              <button
-                onClick={() => navigator.clipboard.writeText(shareLink)}
-                className="bg-blue-500 text-white px-3 py-2 rounded flex items-center gap-1 whitespace-nowrap"
-              >
-                <Copy size={16} /> Copy
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div ref={printRef} className="max-w-6xl mx-auto p-2 md:p-4">
-          <div className={`${cardBgClass} rounded-lg shadow-lg p-3 md:p-6 mb-6`}>
-            <h2 className={`text-lg md:text-xl font-semibold mb-4 text-center ${textClass}`}>
-              {bracket.isBlank32 
-                ? '32-Racer Blank Tournament Bracket' 
-                : bracket.isCustom 
-                  ? `${bracket.customSize}-Racer Blank Tournament Bracket`
-                  : 'Winners Bracket'}
-              {bracket.isRandomized && (
-                <span className="text-xs md:text-sm text-blue-600 ml-2 block md:inline">(Randomly Seeded)</span>
-              )}
-            </h2>
-            
-            {/* Mobile: Single Round View */}
-            {isMobile ? (
-              <div 
-                className="overflow-y-auto pb-8"
-                onTouchStart={handleTouchStart}
-                onTouchEnd={handleTouchEnd}
-              >
-                <div className="space-y-4">
-                  {bracket.winners[currentRound] && bracket.winners[currentRound].map((match, matchIndex) => {
-                    if ((!match.player1 || match.player1 === 'TBD' || match.player1 === '') && 
-                        (!match.player2 || match.player2 === 'TBD' || match.player2 === '')) {
-                      return null;
-                    }
-
-                    const getSourceText = () => {
-                      if (currentRound === 0) return null;
-                      const prevMatchStart = matchIndex * 2 + 1;
-                      const prevMatchEnd = prevMatchStart + 1;
-                      return `Winner from Match ${prevMatchStart} vs ${prevMatchEnd}`;
-                    };
-
-                    const sourceText = getSourceText();
-                    
-                    return (
-                      <div 
-                        key={matchIndex}
-                        className={`border ${borderClass} rounded-lg p-4 ${darkMode ? 'bg-gray-700' : 'bg-gray-50'}`}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <div className={`text-sm font-bold ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                            Match {match.match}
-                          </div>
-                          {match.winner && (
-                            <button
-                              onClick={() => clearWinner(currentRound, matchIndex)}
-                              className="text-red-500 hover:text-red-700 text-xs no-print p-2"
-                              title="Clear winner"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
-                        
-                        {sourceText && (
-                          <div className="text-xs text-blue-600 mb-3 italic border-l-2 border-blue-200 pl-2 bg-blue-50 p-2 rounded">
-                            {sourceText}
-                          </div>
-                        )}
-                        
-                        <div className="space-y-3">
-                          <button
-                            onClick={() => selectWinner(currentRound, matchIndex, match.player1)}
-                            disabled={!match.player1 || match.player1 === 'TBD' || match.player1 === ''}
-                            className={`w-full p-4 rounded-lg border-2 text-base font-semibold text-left transition-all touch-manipulation ${
-                              match.winner === match.player1
-                                ? 'bg-green-100 border-green-500 text-green-900'
-                                : darkMode 
-                                  ? 'bg-gray-600 border-gray-500 active:bg-gray-500 text-gray-100'
-                                  : 'bg-white border-gray-300 active:bg-blue-50 active:border-blue-300'
-                            } ${(!match.player1 || match.player1 === 'TBD' || match.player1 === '') ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                          >
-                            {match.player1 || 'TBD'}
-                            {match.winner === match.player1 && (
-                              <span className="ml-2 text-green-600 text-xl">✓</span>
-                            )}
-                          </button>
-                          
-                          <div className={`text-center text-sm font-bold ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                            VS
-                          </div>
-                          
-                          <button
-                            onClick={() => selectWinner(currentRound, matchIndex, match.player2)}
-                            disabled={!match.player2 || match.player2 === 'TBD' || match.player2 === ''}
-                            className={`w-full p-4 rounded-lg border-2 text-base font-semibold text-left transition-all touch-manipulation ${
-                              match.winner === match.player2
-                                ? 'bg-green-100 border-green-500 text-green-900'
-                                : darkMode 
-                                  ? 'bg-gray-600 border-gray-500 active:bg-gray-500 text-gray-100'
-                                  : 'bg-white border-gray-300 active:bg-blue-50 active:border-blue-300'
-                            } ${(!match.player2 || match.player2 === 'TBD' || match.player2 === '') ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                          >
-                            {match.player2 || 'TBD'}
-                            {match.winner === match.player2 && (
-                              <span className="ml-2 text-green-600 text-xl">✓</span>
-                            )}
-                          </button>
-                        </div>
-                        
-                        {match.winner && (
-                          <div className="mt-3 p-3 bg-green-100 rounded-lg text-center">
-                            <div className="text-sm font-bold text-green-600">WINNER</div>
-                            <div className="text-lg font-bold text-green-700">{match.winner}</div>
-                          </div>
-                        )}
-                        
-                        {match.timestamp && (
-                          <div className={`mt-2 text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'} flex items-center gap-1`}>
-                            <Clock size={12} />
-                            {new Date(match.timestamp).toLocaleTimeString()}
-                          </div>
-                        )}
-                        
-                        <div className="mt-3 no-print">
-                          <input
-                            type="text"
-                            placeholder="Add notes..."
-                            value={match.notes || ''}
-                            onChange={(e) => updateMatchNotes(currentRound, matchIndex, e.target.value)}
-                            className={`w-full text-sm p-2 border rounded ${darkMode ? 'bg-gray-600 border-gray-500 text-gray-100' : 'bg-white border-gray-300'}`}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                
-                <div className="text-center mt-6 text-sm text-gray-500">
-                  <p>👈 Swipe to navigate rounds 👉</p>
-                </div>
-              </div>
-            ) : (
-              /* Desktop: All Rounds Horizontal */
-              <div className="overflow-x-auto pb-8">
-                <div className="flex gap-8 min-w-max">
-                  {bracket.winners.map((round, roundIndex) => (
-                    <div key={roundIndex} className="flex flex-col">
-                      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-t-lg text-center font-bold">
-                        {getRoundName(roundIndex, bracket.rounds)}
-                      </div>
-                      <div className="relative border-l-4 border-r-4 border-blue-200 px-2" style={{ height: `${totalHeight}px`, minWidth: '200px' }}>
-                        {round.map((match, matchIndex) => {
-                          if ((!match.player1 || match.player1 === 'TBD' || match.player1 === '') && 
-                              (!match.player2 || match.player2 === 'TBD' || match.player2 === '')) {
-                            return null;
-                          }
-
-                          let topPosition = 0;
-                          
-                          if (roundIndex === 0) {
-                            topPosition = matchIndex * (matchHeight + baseGap);
-                          } else {
-                            const spacing = Math.pow(2, roundIndex);
-                            const offset = (spacing * (matchHeight + baseGap)) / 2;
-                            topPosition = matchIndex * spacing * (matchHeight + baseGap) + offset - (matchHeight / 2);
-                          }
-
-                          const getSourceText = () => {
-                            if (roundIndex === 0) return null;
-                            const prevMatchStart = matchIndex * 2 + 1;
-                            const prevMatchEnd = prevMatchStart + 1;
-                            return `Winner from Match ${prevMatchStart} vs Winner from Match ${prevMatchEnd}`;
-                          };
-
-                          const sourceText = getSourceText();
-                          
-                          return (
-                            <div 
-                              key={matchIndex}
-                              className="absolute no-print-interactions"
-                              style={{ top: `${topPosition}px` }}
-                            >
-                              <div className={`border ${borderClass} rounded-lg p-3 ${darkMode ? 'bg-gray-700' : 'bg-gray-50'} min-w-48`}>
-                                <div className="flex justify-between items-center mb-1">
-                                  <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Match {match.match}</div>
-                                  {match.winner && (
-                                    <button
-                                      onClick={() => clearWinner(roundIndex, matchIndex)}
-                                      className="text-red-500 hover:text-red-700 text-xs no-print"
-                                      title="Clear winner"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  )}
-                                </div>
-                                {sourceText && (
-                                  <div className="text-xs text-blue-600 mb-2 italic border-l-2 border-blue-200 pl-2 bg-blue-50 p-1 rounded">
-                                    {sourceText}
-                                  </div>
-                                )}
-                                <div className="space-y-2">
-                                  <button
-                                    onClick={() => selectWinner(roundIndex, matchIndex, match.player1)}
-                                    disabled={!match.player1 || match.player1 === 'TBD' || match.player1 === ''}
-                                    className={`w-full p-2 rounded border text-sm text-left transition-all ${
-                                      match.winner === match.player1
-                                        ? 'bg-green-100 border-green-500 font-bold text-green-900'
-                                        : darkMode 
-                                          ? 'bg-gray-600 border-gray-500 hover:bg-gray-500 text-gray-100'
-                                          : 'bg-white border-gray-300 hover:bg-blue-50 hover:border-blue-300'
-                                    } ${(!match.player1 || match.player1 === 'TBD' || match.player1 === '') ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                                  >
-                                    {match.player1 || 'TBD'}
-                                    {match.winner === match.player1 && (
-                                      <span className="ml-2 text-green-600">✓</span>
-                                    )}
-                                  </button>
-                                  <div className={`text-center text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>vs</div>
-                                  <button
-                                    onClick={() => selectWinner(roundIndex, matchIndex, match.player2)}
-                                    disabled={!match.player2 || match.player2 === 'TBD' || match.player2 === ''}
-                                    className={`w-full p-2 rounded border text-sm text-left transition-all ${
-                                      match.winner === match.player2
-                                        ? 'bg-green-100 border-green-500 font-bold text-green-900'
-                                        : darkMode 
-                                          ? 'bg-gray-600 border-gray-500 hover:bg-gray-500 text-gray-100'
-                                          : 'bg-white border-gray-300 hover:bg-blue-50 hover:border-blue-300'
-                                    } ${(!match.player2 || match.player2 === 'TBD' || match.player2 === '') ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                                  >
-                                    {match.player2 || 'TBD'}
-                                    {match.winner === match.player2 && (
-                                      <span className="ml-2 text-green-600">✓</span>
-                                    )}
-                                  </button>
-                                </div>
-                                {match.winner && (
-                                  <div className="mt-2 text-xs text-green-600 font-semibold">
-                                    Winner: {match.winner}
-                                  </div>
-                                )}
-                                {match.timestamp && (
-                                  <div className={`mt-1 text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'} flex items-center gap-1`}>
-                                    <Clock size={10} />
-                                    {new Date(match.timestamp).toLocaleTimeString()}
-                                  </div>
-                                )}
-                                <div className="mt-2 no-print">
-                                  <input
-                                    type="text"
-                                    placeholder="Add notes..."
-                                    value={match.notes || ''}
-                                    onChange={(e) => updateMatchNotes(roundIndex, matchIndex, e.target.value)}
-                                    className={`w-full text-xs p-1 border rounded ${darkMode ? 'bg-gray-600 border-gray-500 text-gray-100' : 'bg-white border-gray-300'}`}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="print-only mt-8 text-center text-sm text-gray-500">
-            Generated by Bracket Racing App - {new Date().toLocaleString()}
-          </div>
-        </div>
-
-        <style jsx>{`
-          @media print {
-            .no-print { display: none !important; }
-            .no-print-interactions button { display: none !important; }
-            .no-print-interactions input { display: none !important; }
-            .print-only { display: block !important; }
-            body { margin: 0; }
-          }
-          @media screen {
-            .print-only { display: none; }
-          }
-          .touch-manipulation {
-            touch-action: manipulation;
-            -webkit-tap-highlight-color: transparent;
-          }
-        `}</style>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`min-h-screen ${darkMode ? 'bg-gradient-to-br from-gray-900 to-gray-800' : 'bg-gradient-to-br from-blue-50 to-indigo-100'} p-4`}>
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-6 md:mb-8">
-          <div className="flex justify-between items-center mb-4">
-            <div></div>
-            <h1 className={`text-2xl md:text-4xl font-bold ${textClass} flex items-center justify-center gap-2 md:gap-3`}>
-              <Trophy className="text-yellow-500" size={isMobile ? 24 : 32} />
-              <span className="hidden sm:inline">Bracket Racing Tournament</span>
-              <span className="sm:hidden">Bracket Racing</span>
-            </h1>
-            <button
-              onClick={toggleDarkMode}
-              className="bg-gray-600 hover:bg-gray-700 text-white p-2 md:p-3 rounded-lg transition-colors"
-            >
-              {darkMode ? <Sun size={isMobile ? 16 : 20} /> : <Moon size={isMobile ? 16 : 20} />}
-            </button>
-          </div>
-          <p className={`text-sm md:text-base ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-            Create tournament brackets for up to 32 participants
-          </p>
-          {!isMobile && (
-            <p className={`text-xs md:text-sm ${darkMode ? 'text-gray-500' : 'text-gray-500'} mt-2`}>
-              Keyboard shortcuts: Ctrl+S (Save) • Ctrl+E (Export) • Ctrl+P (Print) • Ctrl+Z (Undo)
-            </p>
-          )}
-        </div>
-
-        <div className={`${cardBgClass} rounded-xl shadow-xl p-4 md:p-6 mb-4 md:mb-6`}>
-          <div className="mb-4">
-            <label className={`block text-sm font-medium ${textClass} mb-2`}>
-              Tournament Name
-            </label>
-            <input
-              type="text"
-              value={tournamentName}
-              onChange={(e) => setTournamentName(e.target.value)}
-              placeholder="Enter tournament name"
-              className={`w-full p-3 border ${borderClass} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-            />
-          </div>
-
-          <div className="mb-4 flex flex-col sm:flex-row gap-2">
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded-lg transition-colors text-base"
-            >
-              <Settings size={18} />
-              {showSettings ? 'Hide' : 'Show'} Settings
-            </button>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="file"
-                accept=".json"
-                onChange={loadTournament}
-                className="hidden"
-                id="load-tournament"
-              />
-              <label
-                htmlFor="load-tournament"
-                className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-3 rounded-lg transition-colors cursor-pointer text-base w-full sm:w-auto"
-              >
-                <Upload size={18} />
-                Load Tournament
-              </label>
-            </label>
-          </div>
-
-          {showSettings && (
-            <div className={`mb-6 p-4 border ${borderClass} rounded-lg space-y-4`}>
-              <div>
-                <label className={`block text-sm font-medium ${textClass} mb-2`}>
-                  Seeding Mode
-                </label>
-                <select
-                  value={seedingMode}
-                  onChange={(e) => setSeedingMode(e.target.value)}
-                  className={`w-full p-3 border ${borderClass} rounded-lg ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-                >
-                  <option value="random">Random Seeding</option>
-                  <option value="ranked">Ranked Seeding (keep order)</option>
-                  <option value="manual">Manual Seeding</option>
-                </select>
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium ${textClass} mb-2`}>
-                  Bracket Format
-                </label>
-                <select
-                  value={bracketFormat}
-                  onChange={(e) => setBracketFormat(e.target.value)}
-                  className={`w-full p-3 border ${borderClass} rounded-lg ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-                >
-                  <option value="single">Single Elimination</option>
-                  <option value="double">Double Elimination</option>
-                </select>
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium ${textClass} mb-2`}>
-                  Best of X Races
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="7"
-                  value={bestOf}
-                  onChange={(e) => setBestOf(parseInt(e.target.value) || 1)}
-                  className={`w-full p-3 border ${borderClass} rounded-lg ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className={`${cardBgClass} rounded-xl shadow-xl p-4 md:p-6`}>
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <label className={`flex items-center gap-2 text-base md:text-lg font-semibold ${textClass}`}>
-                <Users className="text-blue-500" size={isMobile ? 18 : 20} />
-                Participants ({participants.filter(p => p && p.trim()).length}/32)
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={importParticipants}
-                  className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 md:gap-2 transition-colors"
-                >
-                  <Upload size={14} />
-                  <span className="hidden sm:inline">Import</span>
-                </button>
-                <button
-                  onClick={populateTestData}
-                  className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 md:gap-2 transition-colors"
-                >
-                  <Trophy size={14} />
-                  <span className="hidden sm:inline">Test</span>
-                </button>
-              </div>
-            </div>
-            
-            <div className="grid gap-3 max-h-96 overflow-y-auto">
-              {participants.map((participant, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <span className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-500'} w-6 md:w-8`}>
-                    {index + 1}.
-                  </span>
-                  <input
-                    type="text"
-                    value={participant}
-                    onChange={(e) => updateParticipant(index, e.target.value)}
-                    placeholder={`Participant ${index + 1}`}
-                    className={`flex-1 p-3 border ${borderClass} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-                  />
-                  {participants.length > 1 && (
-                    <button
-                      onClick={() => removeParticipant(index)}
-                      className="p-3 text-red-500 hover:bg-red-50 rounded-lg transition-colors touch-manipulation"
-                    >
-                      <Minus size={18} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <button
-              onClick={addParticipant}
-              disabled={participants.length >= 32}
-              className={`mt-4 w-full ${darkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-100 hover:bg-gray-200'} disabled:bg-gray-50 disabled:text-gray-400 ${textClass} p-3 rounded-lg flex items-center justify-center gap-2 transition-colors text-base touch-manipulation`}
-            >
-              <Plus size={18} />
-              Add Participant {participants.length < 32 ? `(${32 - participants.length} left)` : '(Max)'}
-            </button>
-          </div>
-
-          <div className="mb-6">
-            <label className={`flex items-center gap-3 ${textClass} cursor-pointer`}>
-              <input
-                type="checkbox"
-                checked={includeLosers}
-                onChange={(e) => setIncludeLosers(e.target.checked)}
-                className="w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-              />
-              <span className="font-medium text-sm md:text-base">Include Losers Bracket (Double Elimination)</span>
-            </label>
-            <p className={`text-xs md:text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'} ml-8`}>
-              Creates a secondary bracket for eliminated participants
-            </p>
-          </div>
-
-          <div className="flex flex-col md:flex-row gap-3 md:gap-4">
-            <button
-              onClick={() => generateBracket()}
-              disabled={participants.filter(p => p && p.trim()).length < 2}
-              className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-300 disabled:to-gray-300 text-white p-4 rounded-lg font-semibold flex items-center justify-center gap-2 transition-all transform active:scale-95 disabled:active:scale-100 touch-manipulation text-base"
-            >
-              <Trophy size={20} />
-              <span className="hidden sm:inline">Generate Tournament Bracket</span>
-              <span className="sm:hidden">Generate Bracket</span>
-            </button>
-            
-            <button
-              onClick={() => generateBracket(true)}
-              className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white p-4 rounded-lg font-semibold flex items-center justify-center gap-2 transition-all transform active:scale-95 touch-manipulation text-base"
-            >
-              <Users size={20} />
-              <span className="hidden sm:inline">Generate Blank 32-Racer</span>
-              <span className="sm:hidden">Blank 32</span>
-            </button>
-          </div>
-
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <label className={`block text-sm font-medium ${textClass} mb-2`}>
-              Or create a custom blank bracket:
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="number"
-                min="2"
-                max="64"
-                value={customBracketSize}
-                onChange={(e) => setCustomBracketSize(e.target.value)}
-                placeholder="Number of racers (2-64)"
-                className={`flex-1 p-3 border ${borderClass} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-all ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white'} text-base`}
-              />
-              <button
-                onClick={() => generateBracket(false, customBracketSize)}
-                disabled={!customBracketSize || customBracketSize < 2}
-                className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-300 text-white px-6 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-all transform active:scale-95 disabled:active:scale-100 whitespace-nowrap touch-manipulation text-base"
-              >
-                <Trophy size={18} />
-                Generate Custom
-              </button>
-            </div>
-            <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'} mt-2`}>
-              Bracket will be sized to next power of 2 (e.g., 20 racers = 32-spot bracket)
-            </p>
-          </div>
-
-          {participants.filter(p => p && p.trim()).length < 2 && (
-            <p className="text-center text-red-500 text-sm mt-4">
-              Please enter at least 2 participants to generate a bracket
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+    @media screen { .print-only { display: none; } }
+    .touch-manipulation { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .modal-backdrop { position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const VERSION = 'V1.4';
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+const state = {
+  participants: [''],
+  bracket: null,
+  includeLosers: false,
+  customBracketSize: '',
+  tournamentName: '',
+  seedingMode: 'random',
+  darkMode: false,
+  history: [],
+  showSettings: false,
+  isMobile: window.innerWidth < 768,
+  currentRound: 0,
+  pendingFinal: null,
+  grandFinal: null,
+  showResetModal: false,
+  showExportDropdown: false,
+  finalStandings: null,
+  showStandingsModal: false,
+  touchStartX: 0,
 };
 
-export default BracketRacingApp;
+// ─── PERSISTENCE ──────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => { state.isMobile = window.innerWidth < 768; render(); });
+
+setInterval(() => {
+  localStorage.setItem('bracketChampState', JSON.stringify({
+    participants: state.participants,
+    tournamentName: state.tournamentName,
+    darkMode: state.darkMode,
+    seedingMode: state.seedingMode,
+    includeLosers: state.includeLosers,
+  }));
+}, 2000);
+
+try {
+  const saved = JSON.parse(localStorage.getItem('bracketChampState') || '{}');
+  if (saved.participants) state.participants = saved.participants;
+  if (saved.tournamentName) state.tournamentName = saved.tournamentName;
+  if (saved.darkMode !== undefined) state.darkMode = saved.darkMode;
+  if (saved.seedingMode) state.seedingMode = saved.seedingMode;
+  if (saved.includeLosers !== undefined) state.includeLosers = saved.includeLosers;
+} catch(e) {}
+
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function getRoundName(roundIndex, totalRounds) {
+  const r = totalRounds - roundIndex;
+  if (r === 1) return 'Final';
+  if (r === 2) return 'Semi-Final';
+  if (r === 3) return 'Quarter-Final';
+  return 'Round ' + (roundIndex + 1);
+}
+
+function getLBRoundName(lri) {
+  return lri % 2 === 0 ? 'LB Rd ' + (Math.floor(lri/2)+1) : 'LB Rd ' + (Math.floor(lri/2)+1) + 'B';
+}
+
+// ─── BRACKET GENERATION ───────────────────────────────────────────────────────
+function generateLosersBracket(rounds) {
+  const lb = [];
+  for (let lr = 0; lr < 2 * (rounds - 1); lr++) {
+    const matchCount = Math.pow(2, rounds - 2 - Math.floor(lr / 2));
+    const round = [];
+    for (let i = 0; i < matchCount; i++) {
+      round.push({ match: i+1, player1:'', player2:'', winner:'', timestamp:null });
+    }
+    lb.push(round);
+  }
+  return lb;
+}
+
+function generateBracket(blank32, customSize) {
+  blank32 = blank32 || false; customSize = customSize || null;
+  let filledParticipants, bracketSize;
+
+  if (customSize) {
+    const size = parseInt(customSize);
+    if (isNaN(size) || size < 2 || size > 64) { alert('Enter a number between 2 and 64'); return; }
+    bracketSize = size;
+    filledParticipants = Array(bracketSize).fill('').map((_,i) => 'Racer '+(i+1));
+  } else if (blank32) {
+    filledParticipants = Array(32).fill('').map((_,i) => 'Racer '+(i+1));
+    bracketSize = 32;
+  } else {
+    const valid = state.participants.filter(p => p && p.trim());
+    if (valid.length < 2) { alert('Please enter at least 2 participants'); return; }
+    filledParticipants = state.seedingMode === 'random' ? shuffleArray(valid) : [...valid];
+    bracketSize = filledParticipants.length;
+  }
+
+  const rounds = Math.ceil(Math.log2(bracketSize));
+  const perfect = Math.pow(2, rounds);
+  const byesNeeded = perfect - filledParticipants.length;
+  for (let i = 0; i < byesNeeded; i++) filledParticipants.push('BYE');
+  if (byesNeeded > 0 && !blank32 && !customSize && state.seedingMode === 'random') {
+    filledParticipants = shuffleArray(filledParticipants);
+  }
+
+  const firstRound = [];
+  for (let i = 0; i < filledParticipants.length; i += 2) {
+    const m = { match: Math.floor(i/2)+1, player1: filledParticipants[i], player2: filledParticipants[i+1], winner:'', timestamp:null };
+    if (m.player1 === 'BYE' && m.player2 !== 'BYE') m.winner = m.player2;
+    else if (m.player2 === 'BYE' && m.player1 !== 'BYE') m.winner = m.player1;
+    firstRound.push(m);
+  }
+
+  const winners = [firstRound];
+  for (let r = 1; r < rounds; r++) {
+    const count = Math.pow(2, rounds - r - 1);
+    winners.push(Array(count).fill(null).map((_,i) => ({ match:i+1, player1:'', player2:'', winner:'', timestamp:null })));
+  }
+
+  // Auto-advance BYE winners
+  firstRound.forEach((m, idx) => {
+    if (m.winner && winners[1]) {
+      const nm = winners[1][Math.floor(idx/2)];
+      if (idx % 2 === 0) nm.player1 = m.winner; else nm.player2 = m.winner;
+    }
+  });
+
+  state.bracket = {
+    winners,
+    losers: state.includeLosers ? generateLosersBracket(rounds) : null,
+    rounds,
+    name: state.tournamentName || 'Unnamed Tournament',
+    createdAt: new Date().toISOString(),
+    finalStandings: null,
+    grandFinal: null,
+  };
+  state.history = [];
+  state.grandFinal = null;
+  state.finalStandings = null;
+  state.currentRound = 0;
+  state.pendingFinal = null;
+  if (customSize) state.customBracketSize = '';
+  render();
+}
+
+// ─── WINNER SELECTION ─────────────────────────────────────────────────────────
+function feedLoser(nb, wRoundIndex, wMatchIndex, loser) {
+  if (!nb.losers) return;
+  const lrIndex = wRoundIndex === 0 ? 0 : wRoundIndex * 2 - 1;
+  if (lrIndex >= nb.losers.length) return;
+  const lRound = nb.losers[lrIndex];
+  if (wRoundIndex === 0) {
+    const lmi = Math.floor(wMatchIndex / 2);
+    if (!lRound[lmi]) return;
+    if (wMatchIndex % 2 === 0) lRound[lmi].player1 = loser;
+    else lRound[lmi].player2 = loser;
+  } else {
+    if (!lRound[wMatchIndex]) return;
+    lRound[wMatchIndex].player2 = loser;
+  }
+}
+
+function doSelectWinnerInLosers(lRoundIndex, lMatchIndex, winner, nb) {
+  const m = nb.losers[lRoundIndex][lMatchIndex];
+  m.winner = winner; m.timestamp = new Date().toISOString();
+  const next = lRoundIndex + 1;
+  if (next >= nb.losers.length) return;
+  const nextIsDropIn = next % 2 === 1;
+  if (nextIsDropIn) {
+    const nm = nb.losers[next][lMatchIndex];
+    if (nm) nm.player1 = winner;
+  } else {
+    const nmi = Math.floor(lMatchIndex / 2);
+    const nm = nb.losers[next][nmi];
+    if (nm) { if (lMatchIndex % 2 === 0) nm.player1 = winner; else nm.player2 = winner; }
+  }
+}
+
+window.selectLoserWinner = function(lRoundIndex, lMatchIndex, playerNum) {
+  if (!state.bracket) return;
+  const match = state.bracket.losers[lRoundIndex][lMatchIndex];
+  const winner = playerNum === 1 ? match.player1 : match.player2;
+  if (!winner || winner === 'TBD') return;
+  state.history.push(JSON.parse(JSON.stringify(state.bracket)));
+  const nb = JSON.parse(JSON.stringify(state.bracket));
+  if (navigator.vibrate) navigator.vibrate(50);
+  doSelectWinnerInLosers(lRoundIndex, lMatchIndex, winner, nb);
+  state.bracket = nb;
+  const isLastLB = lRoundIndex === nb.losers.length - 1;
+  if (isLastLB) {
+    const wChamp = nb.winners[nb.rounds-1][0] && nb.winners[nb.rounds-1][0].winner;
+    if (wChamp) {
+      setTimeout(() => { state.grandFinal = { wChampion: wChamp, lbChampion: winner, winner:'' }; render(); }, 100);
+      return;
+    }
+  }
+  render();
+};
+
+window.clearLoserWinner = function(lRoundIndex, lMatchIndex) {
+  if (!state.bracket) return;
+  state.history.push(JSON.parse(JSON.stringify(state.bracket)));
+  const nb = JSON.parse(JSON.stringify(state.bracket));
+  nb.losers[lRoundIndex][lMatchIndex].winner = '';
+  nb.losers[lRoundIndex][lMatchIndex].timestamp = null;
+  state.bracket = nb;
+  render();
+};
+
+function computeStandings(nb, gf) {
+  const eliminated = {};
+  nb.winners.forEach((round, ri) => {
+    round.forEach(m => {
+      if (!m.winner || m.player1 === 'BYE' || m.player2 === 'BYE') return;
+      const loser = m.winner === m.player1 ? m.player2 : m.player1;
+      if (!loser) return;
+      if (nb.losers) eliminated[loser] = { bracket:'W', roundIndex:ri, dropped:true };
+      else eliminated[loser] = { bracket:'W', roundIndex:ri, dropped:false };
+    });
+  });
+  if (nb.losers) {
+    nb.losers.forEach((round, lri) => {
+      round.forEach(m => {
+        if (!m.winner) return;
+        const loser = m.winner === m.player1 ? m.player2 : m.player1;
+        if (loser) eliminated[loser] = { bracket:'L', roundIndex:lri, dropped:false };
+      });
+    });
+  }
+  const loser = gf.winner === gf.wChampion ? gf.lbChampion : gf.wChampion;
+  const champion = gf.winner;
+  const sorted = Object.entries(eliminated)
+    .filter(([p]) => p !== champion && p !== loser)
+    .sort((a,b) => {
+      const sa = a[1].bracket === 'L' ? a[1].roundIndex+1000 : a[1].roundIndex;
+      const sb = b[1].bracket === 'L' ? b[1].roundIndex+1000 : b[1].roundIndex;
+      return sb - sa;
+    });
+  const standings = [
+    { place:1, player:champion, note:'🏆 Tournament Champion' },
+    { place:2, player:loser, note: gf.winner===gf.wChampion ? 'Losers Bracket Champion' : 'Winners Bracket Champion' },
+  ];
+  let place = 3, i = 0;
+  while (i < sorted.length) {
+    const curr = sorted[i][1];
+    let j = i+1;
+    while (j < sorted.length && sorted[j][1].bracket===curr.bracket && sorted[j][1].roundIndex===curr.roundIndex) j++;
+    const group = sorted.slice(i,j).map(([p])=>p);
+    const label = group.length > 1 ? 'T-'+place : ''+place;
+    group.forEach(p => standings.push({ place:label, player:p, note:'' }));
+    place += group.length; i = j;
+  }
+  return standings;
+}
+
+window.confirmGrandFinalWinner = function(playerNum) {
+  if (!state.grandFinal) return;
+  const winner = playerNum === 1 ? state.grandFinal.wChampion : state.grandFinal.lbChampion;
+  const gf = { ...state.grandFinal, winner, timestamp: new Date().toISOString() };
+  state.grandFinal = gf;
+  const nb = JSON.parse(JSON.stringify(state.bracket));
+  nb.grandFinal = gf;
+  const standings = computeStandings(nb, gf);
+  nb.finalStandings = standings;
+  state.bracket = nb;
+  state.finalStandings = standings;
+  state.showStandingsModal = true;
+  render();
+};
+
+function doSelectWinner(roundIndex, matchIndex, winner) {
+  state.history.push(JSON.parse(JSON.stringify(state.bracket)));
+  const nb = JSON.parse(JSON.stringify(state.bracket));
+  const m = nb.winners[roundIndex][matchIndex];
+  const loser = m.player1 === winner ? m.player2 : m.player1;
+  m.winner = winner; m.timestamp = new Date().toISOString();
+  if (navigator.vibrate) navigator.vibrate(50);
+
+  if (roundIndex < nb.rounds - 1) {
+    const nm = nb.winners[roundIndex+1][Math.floor(matchIndex/2)];
+    if (matchIndex % 2 === 0) nm.player1 = winner; else nm.player2 = winner;
+  }
+  if (nb.losers && loser && loser !== 'BYE' && loser !== '') {
+    feedLoser(nb, roundIndex, matchIndex, loser);
+  }
+  state.bracket = nb;
+
+  if (roundIndex === nb.rounds - 1 && !nb.losers) {
+    // Single elim final — compute standings
+    const elim = {};
+    nb.winners.forEach((round, ri) => {
+      round.forEach(m2 => {
+        if (!m2.winner || m2.player1 === 'BYE' || m2.player2 === 'BYE') return;
+        const l = m2.winner === m2.player1 ? m2.player2 : m2.player1;
+        if (l) elim[l] = ri;
+      });
+    });
+    const sorted = Object.entries(elim).filter(([p])=>p!==winner).sort((a,b)=>b[1]-a[1]);
+    const stList = [{ place:1, player:winner, note:'🏆 Tournament Champion' }];
+    let pl = 2, si = 0;
+    while (si < sorted.length) {
+      const ri = sorted[si][1]; let sj = si+1;
+      while (sj < sorted.length && sorted[sj][1]===ri) sj++;
+      const group = sorted.slice(si,sj).map(([p])=>p);
+      const lbl = group.length>1 ? 'T-'+pl : ''+pl;
+      group.forEach(p => stList.push({ place:lbl, player:p, note:'' }));
+      pl += group.length; si = sj;
+    }
+    nb.finalStandings = stList;
+    state.bracket = nb;
+    state.finalStandings = stList;
+    state.showStandingsModal = true;
+  }
+  render();
+}
+
+window.selectWinner = function(roundIndex, matchIndex, playerNum) {
+  if (!state.bracket) return;
+  const m = state.bracket.winners[roundIndex][matchIndex];
+  const winner = playerNum === 1 ? m.player1 : m.player2;
+  if (!winner || winner === 'TBD' || winner === 'BYE') return;
+  if (roundIndex === state.bracket.rounds - 1) {
+    state.pendingFinal = { roundIndex, matchIndex, winner };
+    render(); return;
+  }
+  doSelectWinner(roundIndex, matchIndex, winner);
+};
+
+window.confirmFinalWinner = function() {
+  if (!state.pendingFinal) return;
+  const { roundIndex, matchIndex, winner } = state.pendingFinal;
+  state.pendingFinal = null;
+  doSelectWinner(roundIndex, matchIndex, winner);
+};
+
+window.cancelFinal = function() { state.pendingFinal = null; render(); };
+
+window.clearWinner = function(roundIndex, matchIndex) {
+  state.history.push(JSON.parse(JSON.stringify(state.bracket)));
+  const nb = JSON.parse(JSON.stringify(state.bracket));
+  nb.winners[roundIndex][matchIndex].winner = '';
+  nb.winners[roundIndex][matchIndex].timestamp = null;
+  state.bracket = nb;
+  render();
+};
+
+window.undoLastAction = function() {
+  if (state.history.length > 0) { state.bracket = state.history.pop(); render(); }
+};
+
+// ─── PARTICIPANTS ─────────────────────────────────────────────────────────────
+window.addParticipant = function() {
+  if (state.participants.length < 32) { state.participants.push(''); render(); }
+};
+window.removeParticipant = function(i) {
+  state.participants = state.participants.filter((_,idx)=>idx!==i);
+  if (state.participants.length===0) state.participants=[''];
+  render();
+};
+window.updateParticipant = function(i, val) { state.participants[i]=val; };
+window.populateTestData = function() {
+  state.participants = ['Mickey Mouse','Bugs Bunny','SpongeBob','Homer Simpson','Scooby-Doo','Tom Cat','Jerry Mouse','Donald Duck','Bart Simpson','Patrick Star','Tweety Bird','Road Runner','Daffy Duck','Porky Pig','Goofy','Pluto','Woody Woodpecker','Fred Flintstone','Barney Rubble','Yogi Bear','Peter Griffin','Stewie Griffin','Eric Cartman','Kenny McCormick','Pikachu','Garfield','Sonic','Mario','Luigi','Popeye','Betty Boop','Felix the Cat'];
+  render();
+};
+
+// ─── NAV / SETTINGS ───────────────────────────────────────────────────────────
+window.backToEntry = function() { state.bracket=null; state.grandFinal=null; state.finalStandings=null; render(); };
+window.toggleDarkMode = function() { state.darkMode=!state.darkMode; render(); };
+window.setSeedingMode = function(v) { state.seedingMode=v; render(); };
+window.setIncludeLosers = function(v) { state.includeLosers=v; render(); };
+window.setTournamentName = function(v) { state.tournamentName=v; };
+window.setCustomSize = function(v) { state.customBracketSize=v; };
+window.setCurrentRound = function(i) { state.currentRound=i; render(); };
+
+window.openResetModal = function() { state.showResetModal=true; render(); };
+window.closeResetModal = function() { state.showResetModal=false; render(); };
+window.doReset = function() {
+  state.participants=[''];state.bracket=null;state.history=[];state.grandFinal=null;
+  state.finalStandings=null;state.tournamentName='';state.showResetModal=false;
+  localStorage.removeItem('bracketChampState');
+  render();
+};
+
+window.toggleExportDropdown = function() { state.showExportDropdown=!state.showExportDropdown; render(); };
+window.closeExportDropdown = function() { state.showExportDropdown=false; render(); };
+
+window.openStandings = function() { state.showStandingsModal=true; render(); };
+window.closeStandings = function() { state.showStandingsModal=false; render(); };
+
+// ─── EXPORT ───────────────────────────────────────────────────────────────────
+function buildASCIIBracket(ab) {
+  const W = 22;
+  const pad = (s,w) => { s=String(s||''); if(s.length>w-2)s=s.slice(0,w-5)+'...'; return s.padEnd(w); };
+  const renderSide = (roundsList, label) => {
+    let out = '\n'+label+'\n'+'─'.repeat(label.length)+'\n';
+    const nr = roundsList.length, fc = roundsList[0].length;
+    const grid = [];
+    for(let s=0;s<fc*4;s++) grid.push(Array(nr).fill(''));
+    roundsList.forEach((round,ri) => {
+      const spm = Math.pow(2,ri);
+      round.forEach((m,mi) => {
+        if(!m.player1&&!m.player2) return;
+        const fs = mi*spm*2, ms = fs+spm-1;
+        const p1=(m.winner===m.player1?'* ':'  ')+(m.player1||'TBD');
+        const p2=(m.winner===m.player2?'* ':'  ')+(m.player2||'TBD');
+        if(ri<nr-1){grid[ms][ri]=pad((m.winner===m.player1?'* ':'  ')+(m.player1||'TBD'),W-1)+'>';}
+        else{grid[fs][ri]=pad(p1,W);}
+        if(ri<nr-1){grid[ms+1][ri]=pad((m.winner===m.player2?'* ':'  ')+(m.player2||'TBD'),W-1)+'>';}
+        else{grid[ms+1][ri]=pad(p2,W);}
+        for(let s2=fs+1;s2<=ms;s2++){if(!grid[s2][ri])grid[s2][ri]=' '.repeat(W-1)+'|';}
+        for(let s2=ms+2;s2<fs+spm*2;s2++){if(!grid[s2][ri])grid[s2][ri]=' '.repeat(W-1)+'|';}
+      });
+    });
+    const hdrs = roundsList.map((_,ri)=>{ const rem=nr-ri; return(rem===1?'Final':rem===2?'Semi':rem===3?'Quarter':'Rd '+(ri+1)).padEnd(W); });
+    out+=hdrs.join(' ')+'\n'; out+=hdrs.map(h=>'─'.repeat(h.length)).join(' ')+'\n';
+    grid.forEach(row=>{ const line=row.map(c=>c||' '.repeat(W)).join(' ').trimEnd(); if(line.trim())out+=line+'\n'; });
+    return out;
+  };
+  let d = renderSide(ab.winners,'WINNERS BRACKET');
+  if(ab.losers&&ab.losers.length>0) d+=renderSide(ab.losers,'LOSERS BRACKET');
+  if(ab.grandFinal){
+    const gf=ab.grandFinal;
+    d+='\nGRAND FINAL\n───────────\n';
+    d+='  '+(gf.winner===gf.wChampion?'*':' ')+' '+gf.wChampion+' (W Bracket)\n';
+    d+='  '+(gf.winner===gf.lbChampion?'*':' ')+' '+gf.lbChampion+' (L Bracket)\n';
+    if(gf.winner) d+='\n  🏆 CHAMPION: '+gf.winner+'\n';
+  }
+  return d;
+}
+
+function buildResults(ab) {
+  const results = {};
+  ab.winners.forEach((round,ri) => {
+    const rn = getRoundName(ri,ab.rounds);
+    round.forEach(m => {
+      if(!m.player1||!m.player2||m.player1==='BYE'||m.player2==='BYE'||!m.winner) return;
+      [m.player1,m.player2].forEach(p => { if(!results[p]) results[p]=[]; });
+      const r1=m.winner===m.player1?'W':'L', r2=m.winner===m.player2?'W':'L';
+      results[m.player1].push({round:rn,match:m.match,opponent:m.player2,result:r1,timestamp:m.timestamp});
+      results[m.player2].push({round:rn,match:m.match,opponent:m.player1,result:r2,timestamp:m.timestamp});
+    });
+  });
+  return results;
+}
+
+window.exportTXT = function() {
+  const ab = state.bracket; if(!ab) return;
+  const results = buildResults(ab);
+  let o = '='.repeat(60)+'\n';
+  o += ab.name.toUpperCase()+'\n';
+  o += 'BRACKETCHAMP '+VERSION+' — TOURNAMENT RESULTS\n';
+  o += '='.repeat(60)+'\n\n';
+  o += 'Generated: '+new Date().toLocaleString()+'\n';
+  o += 'Tournament Date: '+new Date(ab.createdAt).toLocaleDateString()+'\n';
+  const champ = (ab.grandFinal&&ab.grandFinal.winner)||ab.winners[ab.rounds-1][0].winner||'';
+  if(champ) o += 'Tournament Champion: '+champ+'\n';
+  o += '\n';
+  if(ab.finalStandings){
+    o += '='.repeat(60)+'\n';
+    o += 'FINAL STANDINGS\n';
+    o += '='.repeat(60)+'\n';
+    ab.finalStandings.forEach(e => {
+      const ps = String(e.place).padEnd(6);
+      const med = e.place===1?' [CHAMPION]':e.place===2?' [Runner-up]':'';
+      o += '  '+ps+'  '+e.player+med+'\n';
+    });
+    o += '\n';
+  }
+  o += buildASCIIBracket(ab);
+  o += '\n\n='.repeat(30)+'\nRACE-BY-RACE RESULTS\n'+'='.repeat(60)+'\n\n';
+  Object.keys(results).sort().forEach(racer => {
+    const races = results[racer]; if(!races.length) return;
+    o += '-'.repeat(60)+'\nRacer: '+racer+'\n'+'-'.repeat(60)+'\n';
+    races.forEach((r,idx) => {
+      o += (idx+1)+'. '+r.round+' - Match '+r.match+'\n';
+      o += '   vs '+r.opponent+'\n';
+      o += '   Result: '+(r.result==='W'?'WIN':'LOSS')+'\n';
+      if(r.timestamp) o += '   Time: '+new Date(r.timestamp).toLocaleString()+'\n';
+      o += '\n';
+    });
+    const w=races.filter(r=>r.result==='W').length, l=races.filter(r=>r.result==='L').length;
+    o += 'Summary: '+w+'W - '+l+'L\n\n';
+  });
+  download(ab.name.replace(/\s+/g,'-')+'-results.txt', o, 'text/plain');
+  state.showExportDropdown=false; render();
+};
+
+window.exportCSV = function() {
+  const ab = state.bracket; if(!ab) return;
+  const results = buildResults(ab);
+  let c = '';
+  if(ab.finalStandings){
+    c += 'FINAL STANDINGS\nPlace,Player\n';
+    ab.finalStandings.forEach(e => c += '"'+e.place+'","'+e.player+'"\n');
+    c += '\n';
+  }
+  c += 'RACE RESULTS\nRacer,Round,Match,Opponent,Result,Timestamp\n';
+  Object.keys(results).sort().forEach(racer => {
+    results[racer].forEach(r => {
+      c += '"'+racer+'","'+r.round+'",'+r.match+',"'+r.opponent+'","'+r.result+'","'+(r.timestamp||'')+'"\n';
+    });
+  });
+  download(ab.name.replace(/\s+/g,'-')+'-results.csv', c, 'text/csv');
+  state.showExportDropdown=false; render();
+};
+
+window.exportJSON = function() {
+  const ab = state.bracket; if(!ab) return;
+  download(ab.name.replace(/\s+/g,'-')+'-bracket.json', JSON.stringify(ab,null,2), 'application/json');
+  state.showExportDropdown=false; render();
+};
+
+function download(filename, text, type) {
+  const blob = new Blob([text],{type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// ─── COFFEE BUTTON ───────────────────────────────────────────────────────────
+function coffeeBtn() {
+  return '<a href="https://www.buymeacoffee.com/AndrewTech" target="_blank" rel="noopener noreferrer">' +
+    '<img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=AndrewTech&button_colour=5F7FFF&font_colour=ffffff&font_family=Inter&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" style="height:36px;width:auto;">' +
+    '</a>';
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+function render() {
+  document.getElementById('app').innerHTML = state.bracket ? renderBracketScreen() : renderEntryScreen();
+  // Apply dark mode to body
+  document.body.className = state.darkMode ? 'bg-gray-900' : 'bg-gray-50';
+}
+
+// ─── CSS HELPERS ─────────────────────────────────────────────────────────────
+function c(dark, light) { return state.darkMode ? dark : light; }
+const bg    = () => c('bg-gray-900','bg-blue-50');
+const card  = () => c('bg-gray-800','bg-white');
+const txt   = () => c('text-gray-100','text-gray-800');
+const bdr   = () => c('border-gray-700','border-gray-300');
+const inp   = () => c('bg-gray-700 text-gray-100 border-gray-600','bg-white text-gray-800 border-gray-300');
+
+// ─── ENTRY SCREEN ─────────────────────────────────────────────────────────────
+function renderEntryScreen() {
+  const valid = state.participants.filter(p=>p&&p.trim()).length;
+  const byeCount = valid>=2 ? Math.pow(2,Math.ceil(Math.log2(valid)))-valid : 0;
+
+  return `
+  <div class="min-h-screen ${bg()} p-4">
+    <div class="max-w-4xl mx-auto">
+
+      <div class="text-center mb-8">
+        <div class="flex justify-between items-center mb-4">
+          <div></div>
+          <h1 class="text-4xl font-bold ${txt()} flex items-center gap-3">
+            🏆 BracketChamp <span class="text-lg font-normal opacity-40">${VERSION}</span>
+          </h1>
+          <button onclick="toggleDarkMode()" title="Toggle dark mode" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg">
+            ${state.darkMode ? '☀️' : '🌙'}
+          </button>
+        </div>
+        <p class="${c('text-gray-400','text-gray-600')} text-sm">Create tournament brackets for up to 32 participants</p>
+        <div class="mt-3">${coffeeBtn()}</div>
+      </div>
+
+      <!-- Tournament Name -->
+      <div class="${card()} rounded-xl shadow-xl p-6 mb-4">
+        <label class="block text-sm font-medium ${txt()} mb-2">Tournament Name</label>
+        <input type="text" value="${esc(state.tournamentName)}" oninput="setTournamentName(this.value)"
+          placeholder="Enter tournament name"
+          class="w-full p-3 border rounded-lg ${inp()} focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+
+      <!-- Settings -->
+      <div class="${card()} rounded-xl shadow-xl p-6 mb-4">
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium ${txt()} mb-2">Seeding Mode</label>
+            <select onchange="setSeedingMode(this.value)" class="w-full p-3 border rounded-lg ${inp()}">
+              <option value="random" ${state.seedingMode==='random'?'selected':''}>Random Seeding</option>
+              <option value="ranked" ${state.seedingMode==='ranked'?'selected':''}>Ranked (keep order)</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" ${state.includeLosers?'checked':''} onchange="setIncludeLosers(this.checked)" class="w-5 h-5">
+            <span class="${txt()} font-medium">Include Losers Bracket (Double Elimination)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Participants -->
+      <div class="${card()} rounded-xl shadow-xl p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-semibold ${txt()}">Participants (${valid}/32)</h3>
+          <button onclick="populateTestData()" title="Fill with test data" class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-lg text-sm">🏆 Test Data</button>
+        </div>
+
+        ${byeCount > 0 ? `
+        <div class="mb-4 p-3 bg-yellow-100 border border-yellow-400 rounded-lg">
+          <p class="text-yellow-800 text-sm">⚠️ ${valid} participants → ${byeCount} BYE(s) in a ${Math.pow(2,Math.ceil(Math.log2(valid)))}-spot bracket</p>
+        </div>` : ''}
+
+        <div class="space-y-3 max-h-96 overflow-y-auto">
+          ${state.participants.map((p,i) => `
+          <div class="flex gap-2 items-center">
+            <span class="w-7 text-sm ${c('text-gray-400','text-gray-500')}">${i+1}.</span>
+            <input type="text" value="${esc(p)}" oninput="updateParticipant(${i},this.value)"
+              placeholder="Participant ${i+1}"
+              class="flex-1 p-3 border rounded-lg ${inp()} focus:outline-none focus:ring-2 focus:ring-blue-500">
+            ${state.participants.length>1?`<button onclick="removeParticipant(${i})" class="px-3 py-2 text-red-500 hover:bg-red-50 rounded-lg">✕</button>`:''}
+          </div>`).join('')}
+        </div>
+
+        <button onclick="addParticipant()" ${state.participants.length>=32?'disabled':''} class="mt-4 w-full ${c('bg-gray-700 hover:bg-gray-600','bg-gray-100 hover:bg-gray-200')} disabled:opacity-40 ${txt()} p-3 rounded-lg">
+          ➕ Add Participant (${32-state.participants.length} remaining)
+        </button>
+
+        <div class="flex flex-col sm:flex-row gap-3 mt-6">
+          <button onclick="generateBracket()" ${valid<2?'disabled':''} class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white p-4 rounded-lg font-semibold">
+            Generate Bracket
+          </button>
+          <button onclick="generateBracket(true)" class="flex-1 bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg font-semibold">
+            Blank 32-Racer
+          </button>
+        </div>
+
+        <div class="mt-6 pt-6 border-t ${bdr()}">
+          <label class="block text-sm font-medium ${txt()} mb-2">Custom blank bracket size:</label>
+          <div class="flex gap-2">
+            <input type="number" min="2" max="64" value="${esc(state.customBracketSize)}"
+              oninput="setCustomSize(this.value)" placeholder="Racers (2–64)"
+              class="flex-1 p-3 border rounded-lg ${inp()} focus:outline-none focus:ring-2 focus:ring-purple-500">
+            <button onclick="generateBracket(false,state.customBracketSize)" ${!state.customBracketSize||state.customBracketSize<2?'disabled':''}
+              class="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white px-5 py-3 rounded-lg font-semibold">
+              Generate Custom
+            </button>
+          </div>
+        </div>
+
+        ${valid<2?`<p class="text-center text-red-500 text-sm mt-4">Need at least 2 participants</p>`:''}
+      </div>
+
+    </div>
+  </div>`;
+}
+
+// ─── BRACKET SCREEN ───────────────────────────────────────────────────────────
+function renderBracketScreen() {
+  const b = state.bracket;
+  const matchHeight = 190, slotHeight = 210;
+  const firstCount = b.winners[0].length;
+  const totalHeight = firstCount * slotHeight;
+
+  function getTop(roundIndex, matchIndex) {
+    const spm = Math.pow(2, roundIndex);
+    const firstSlot = matchIndex * spm;
+    const centerSlot = firstSlot + spm/2 - 0.5;
+    return centerSlot * slotHeight + (slotHeight/2) - (matchHeight/2);
+  }
+
+  function getLTop(lri, lmi) {
+    const spm = Math.pow(2, Math.floor(lri/2));
+    const firstSlot = lmi * spm;
+    const centerSlot = firstSlot + spm/2 - 0.5;
+    return centerSlot * slotHeight + (slotHeight/2) - (matchHeight/2);
+  }
+
+  function matchCard(match, roundIndex, matchIndex, isLoser) {
+    const accent = isLoser ? 'red' : 'blue';
+    const bg2 = c('bg-gray-700','bg-gray-50');
+    const p1win = match.winner && match.winner === match.player1;
+    const p2win = match.winner && match.winner === match.player2;
+
+    const p1Cls = p1win
+      ? 'bg-green-100 border-green-500 font-bold text-green-900'
+      : match.player1 && match.player1 !== 'TBD' && match.player1 !== 'BYE'
+        ? c('bg-gray-600 border-gray-500 text-gray-100 hover:bg-gray-500','bg-white border-gray-300 hover:bg-blue-50 cursor-pointer')
+        : 'opacity-40 cursor-not-allowed ' + c('bg-gray-600 border-gray-500 text-gray-400','bg-white border-gray-200 text-gray-400');
+    const p2Cls = p2win
+      ? 'bg-green-100 border-green-500 font-bold text-green-900'
+      : match.player2 && match.player2 !== 'TBD' && match.player2 !== 'BYE'
+        ? c('bg-gray-600 border-gray-500 text-gray-100 hover:bg-gray-500','bg-white border-gray-300 hover:bg-blue-50 cursor-pointer')
+        : 'opacity-40 cursor-not-allowed ' + c('bg-gray-600 border-gray-500 text-gray-400','bg-white border-gray-200 text-gray-400');
+
+    const p1Disabled = !match.player1 || match.player1==='TBD' || match.player1==='BYE';
+    const p2Disabled = !match.player2 || match.player2==='TBD' || match.player2==='BYE';
+
+    const onclick1 = isLoser
+      ? `onclick="selectLoserWinner(${roundIndex},${matchIndex},1)"`
+      : `onclick="selectWinner(${roundIndex},${matchIndex},1)"`;
+    const onclick2 = isLoser
+      ? `onclick="selectLoserWinner(${roundIndex},${matchIndex},2)"`
+      : `onclick="selectWinner(${roundIndex},${matchIndex},2)"`;
+    const clearOnclick = isLoser
+      ? `onclick="clearLoserWinner(${roundIndex},${matchIndex})"`
+      : `onclick="clearWinner(${roundIndex},${matchIndex})"`;
+
+    return `
+    <div class="border ${bdr()} rounded-lg p-3 ${bg2} w-full shadow" style="min-width:200px;">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-xs font-bold ${c('text-gray-400',isLoser?'text-red-500':'text-gray-500')}">Match ${match.match}</span>
+        ${match.winner ? `<button ${clearOnclick} title="Clear winner" class="text-red-400 hover:text-red-600 no-print">🗑</button>` : ''}
+      </div>
+      <button ${p1Disabled?'disabled':onclick1} class="w-full p-2 rounded border-2 text-sm text-left transition-all touch-manipulation ${p1Cls}">
+        ${esc(match.player1||'TBD')}${p1win?' ✓':''}
+      </button>
+      <div class="text-center text-xs ${c('text-gray-500','text-gray-400')} my-1">VS</div>
+      <button ${p2Disabled?'disabled':onclick2} class="w-full p-2 rounded border-2 text-sm text-left transition-all touch-manipulation ${p2Cls}">
+        ${esc(match.player2||'TBD')}${p2win?' ✓':''}
+      </button>
+      ${match.winner ? `<div class="mt-2 text-xs text-green-600 font-semibold">Winner: ${esc(match.winner)}</div>` : ''}
+      ${match.timestamp ? `<div class="mt-1 text-xs ${c('text-gray-500','text-gray-400')}">🕐 ${new Date(match.timestamp).toLocaleTimeString()}</div>` : ''}
+    </div>`;
+  }
+
+  // ── Winners bracket columns ──
+  let wCols = b.winners.map((round, ri) => {
+    const colBg = ri % 2 === 0
+      ? c('bg-gray-800','bg-white')
+      : c('bg-gray-750','bg-gray-50');
+    // manually alternate since Tailwind won't compute
+    const colStyle = ri % 2 === 1
+      ? `style="background:${state.darkMode?'#1e293b':'#f9fafb'}"`
+      : '';
+    const header = getRoundName(ri, b.rounds);
+    let cards = '';
+    round.forEach((match, mi) => {
+      if (!match.player1 && !match.player2) return;
+      const top = getTop(ri, mi);
+      cards += `<div class="absolute" style="top:${top}px;left:8px;right:8px;">${matchCard(match,ri,mi,false)}</div>`;
+    });
+    return `
+    <div class="flex flex-col flex-shrink-0" style="width:220px;">
+      <div class="bg-blue-600 text-white px-4 py-2 rounded-t-lg text-center font-bold text-sm">${header}</div>
+      <div class="relative border-l-4 border-r-4 border-blue-200" style="height:${totalHeight}px;">
+        ${cards}
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── Losers bracket columns ──
+  let lbSection = '';
+  if (b.losers && b.losers.length > 0) {
+    const lbFirstCount = b.losers[0].length;
+    const lbTotalH = lbFirstCount * slotHeight;
+    const lbCols = b.losers.map((round, lri) => {
+      let cards = '';
+      round.forEach((match, mi) => {
+        if (!match.player1 && !match.player2) return;
+        const top = getLTop(lri, mi);
+        cards += `<div class="absolute" style="top:${top}px;left:8px;right:8px;">${matchCard(match,lri,mi,true)}</div>`;
+      });
+      return `
+      <div class="flex flex-col flex-shrink-0" style="width:220px;">
+        <div class="bg-red-600 text-white px-4 py-2 rounded-t-lg text-center font-bold text-sm">${getLBRoundName(lri)}</div>
+        <div class="relative border-l-4 border-r-4 border-red-200" style="height:${lbTotalH}px;">
+          ${cards}
+        </div>
+      </div>`;
+    }).join('');
+
+    lbSection = `
+    <div class="${card()} rounded-lg shadow-lg p-4 md:p-6 mb-6">
+      <h2 class="text-lg font-semibold mb-4 text-center ${c('text-red-300','text-red-600')}">Losers Bracket</h2>
+      <div class="overflow-x-auto pb-4">
+        <div class="flex gap-6 min-w-max">${lbCols}</div>
+      </div>
+    </div>`;
+  }
+
+  // ── Grand Final section (if double elim and both champs decided) ──
+  let grandFinalSection = '';
+  if (b.grandFinal && b.grandFinal.winner) {
+    grandFinalSection = `
+    <div class="${card()} rounded-lg shadow-lg p-6 mb-6 border-4 border-yellow-400">
+      <h2 class="text-xl font-bold text-center text-yellow-600 mb-4">🏆 Grand Final Result</h2>
+      <div class="text-center">
+        <div class="text-2xl font-bold ${txt()}">${esc(b.grandFinal.winner)}</div>
+        <div class="text-green-600 font-semibold">Tournament Champion!</div>
+      </div>
+    </div>`;
+  }
+
+  // ── Modals ──
+  let modals = '';
+
+  // Reset modal
+  if (state.showResetModal) {
+    modals += `
+    <div class="modal-backdrop" onclick="closeResetModal()">
+      <div class="${card()} rounded-xl shadow-2xl p-6 max-w-sm w-full" onclick="event.stopPropagation()">
+        <div class="text-center mb-4">
+          <div class="text-4xl mb-2">🔄</div>
+          <h2 class="text-xl font-bold ${txt()}">Reset Tournament?</h2>
+          <p class="mt-2 text-sm ${c('text-gray-400','text-gray-500')}">This will clear everything. Cannot be undone.</p>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button onclick="closeResetModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold">Cancel</button>
+          <button onclick="doReset()" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-semibold">Reset Everything</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Pending final confirmation
+  if (state.pendingFinal) {
+    const isDouble = !!b.losers;
+    modals += `
+    <div class="modal-backdrop">
+      <div class="${card()} rounded-xl shadow-2xl p-6 max-w-sm w-full">
+        <div class="text-center mb-4">
+          <div class="text-4xl mb-2">🏆</div>
+          <h2 class="text-xl font-bold ${txt()}">${isDouble ? 'Winners Bracket Final!' : 'Final Match!'}</h2>
+          <p class="mt-2 ${c('text-gray-300','text-gray-600')}">
+            Declare <strong class="text-green-600">${esc(state.pendingFinal.winner)}</strong> as ${isDouble ? 'Winners Bracket champion' : 'Tournament Champion'}?
+          </p>
+          ${isDouble ? `<p class="text-sm text-orange-500 mt-1">The loser advances to the Grand Final vs the Losers Bracket champion.</p>` : ''}
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button onclick="cancelFinal()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold">Cancel</button>
+          <button onclick="confirmFinalWinner()" class="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold">Confirm!</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Grand Final pick modal
+  if (state.grandFinal && !state.grandFinal.winner) {
+    modals += `
+    <div class="modal-backdrop">
+      <div class="${card()} rounded-xl shadow-2xl p-6 max-w-md w-full">
+        <div class="text-center mb-6">
+          <div class="text-5xl mb-2">🏆</div>
+          <h2 class="text-2xl font-bold ${txt()}">GRAND FINAL</h2>
+          <p class="text-sm ${c('text-gray-400','text-gray-500')} mt-1">Winners Bracket Champion vs Losers Bracket Champion</p>
+        </div>
+        <div class="space-y-3 mb-4">
+          <button onclick="confirmGrandFinalWinner(1)" class="w-full p-4 rounded-lg border-2 text-left font-semibold transition-all hover:border-yellow-400 ${c('bg-gray-700 border-gray-500 text-gray-100','bg-white border-gray-300')}">
+            <span class="text-xs text-blue-500 block mb-1">Winners Bracket Champion</span>
+            ${esc(state.grandFinal.wChampion)}
+          </button>
+          <div class="text-center text-sm font-bold ${c('text-gray-500','text-gray-400')}">VS</div>
+          <button onclick="confirmGrandFinalWinner(2)" class="w-full p-4 rounded-lg border-2 text-left font-semibold transition-all hover:border-yellow-400 ${c('bg-gray-700 border-gray-500 text-gray-100','bg-white border-gray-300')}">
+            <span class="text-xs text-red-500 block mb-1">Losers Bracket Champion</span>
+            ${esc(state.grandFinal.lbChampion)}
+          </button>
+        </div>
+        <p class="text-xs text-center ${c('text-gray-500','text-gray-400')}">Click the winner to complete the tournament</p>
+      </div>
+    </div>`;
+  }
+
+  // Final Standings modal
+  if (state.showStandingsModal && state.finalStandings) {
+    const rows = state.finalStandings.map(e => {
+      const medal = e.place===1?'🥇':e.place===2?'🥈':e.place===3?'🥉':'';
+      const rowBg = e.place===1?'bg-yellow-100 border-2 border-yellow-400':e.place===2?'bg-gray-100 border border-gray-300':e.place===3?'bg-orange-50 border border-orange-200':(state.darkMode?'bg-gray-700':'bg-gray-50');
+      return `
+      <div class="flex items-center gap-3 p-3 rounded-lg ${rowBg}">
+        <span class="text-xl w-10 text-center">${medal||('#'+e.place)}</span>
+        <div class="flex-1">
+          <div class="font-semibold ${txt()}">${esc(e.player)}</div>
+          ${e.note?`<div class="text-xs text-green-600">${e.note}</div>`:''}
+        </div>
+      </div>`;
+    }).join('');
+    modals += `
+    <div class="modal-backdrop" onclick="closeStandings()">
+      <div class="${card()} rounded-xl shadow-2xl p-6 max-w-md w-full max-h-screen overflow-y-auto" onclick="event.stopPropagation()">
+        <div class="text-center mb-6">
+          <div class="text-4xl mb-2">🏆</div>
+          <h2 class="text-2xl font-bold ${txt()}">Final Standings</h2>
+          <p class="text-sm ${c('text-gray-400','text-gray-500')}">${esc(b.name)}</p>
+        </div>
+        <div class="space-y-2 mb-6">${rows}</div>
+        <div class="flex gap-3">
+          <button onclick="closeStandings()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold">Close</button>
+          <button onclick="exportTXT()" class="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold flex items-center justify-center gap-2">
+            📥 Export
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Champion banner
+  const champBanner = (b.grandFinal?.winner || (!b.losers && b.winners[b.rounds-1][0]?.winner))
+    ? `<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 no-print">
+        <div class="bg-yellow-400 text-gray-900 px-6 py-3 rounded-full shadow-2xl font-bold text-lg">
+          🏆 Champion: ${esc(b.grandFinal?.winner || b.winners[b.rounds-1][0]?.winner)}
+        </div>
+       </div>`
+    : '';
+
+  // Export dropdown
+  const exportDropdown = state.showExportDropdown ? `
+    <div class="absolute right-0 mt-1 shadow-lg rounded-lg overflow-hidden z-50 border" style="background:${state.darkMode?'#1f2937':'white'};border-color:${state.darkMode?'#374151':'#e5e7eb'};min-width:150px;">
+      <button onclick="exportTXT()" class="block w-full text-left px-4 py-2 whitespace-nowrap ${c('text-gray-100 hover:bg-gray-700','hover:bg-gray-100')}">📄 Text (.txt)</button>
+      <button onclick="exportCSV()" class="block w-full text-left px-4 py-2 whitespace-nowrap ${c('text-gray-100 hover:bg-gray-700','hover:bg-gray-100')}">📊 CSV (.csv)</button>
+      <button onclick="exportJSON()" class="block w-full text-left px-4 py-2 whitespace-nowrap ${c('text-gray-100 hover:bg-gray-700','hover:bg-gray-100')}">🗂 JSON (.json)</button>
+    </div>` : '';
+
+  // Standings button (shown when tournament is complete)
+  const standingsBtn = b.finalStandings
+    ? `<button onclick="openStandings()" title="View final standings" class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-lg font-semibold">🏆 Standings</button>`
+    : '';
+
+  return `
+  <div class="min-h-screen ${c('bg-gray-900','bg-gray-50')}">
+
+    <!-- Header -->
+    <div class="no-print ${card()} shadow-sm border-b p-4 mb-6">
+      <div class="max-w-7xl mx-auto flex justify-between items-center flex-wrap gap-2">
+        <h1 class="text-2xl font-bold ${txt()} flex items-center gap-2">
+          🏆 ${esc(b.name)} <span class="text-xs font-normal opacity-40">${VERSION}</span>
+        </h1>
+        <div class="flex gap-2 flex-wrap items-center">
+          ${coffeeBtn()}
+          <button onclick="toggleDarkMode()" title="Toggle dark mode" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg">${state.darkMode?'☀️':'🌙'}</button>
+          <button onclick="undoLastAction()" ${state.history.length===0?'disabled':''} title="Undo last action (Ctrl+Z)" class="bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white px-3 py-2 rounded-lg">↶ Undo</button>
+          ${standingsBtn}
+          <button onclick="backToEntry()" title="Back to participant entry" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-2 rounded-lg">👥 Back</button>
+          <div class="relative">
+            <button onclick="toggleExportDropdown()" title="Export results" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg">📥 Export ▾</button>
+            ${exportDropdown}
+          </div>
+          <button onclick="window.print()" title="Print bracket (Ctrl+P)" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg">🖨 Print</button>
+          <button onclick="openResetModal()" title="Reset entire tournament" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg">🔄 Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto p-2 md:p-4">
+
+      <!-- Winners Bracket -->
+      <div class="${card()} rounded-lg shadow-lg p-4 md:p-6 mb-6">
+        <h2 class="text-lg font-semibold mb-4 text-center ${txt()}">Winners Bracket</h2>
+        <div class="overflow-x-auto pb-4">
+          <div class="flex gap-6 min-w-max">${wCols}</div>
+        </div>
+      </div>
+
+      ${lbSection}
+      ${grandFinalSection}
+
+      <div class="print-only mt-8 text-center text-sm text-gray-500">
+        Generated by BracketChamp ${VERSION} — ${new Date().toLocaleString()}
+      </div>
+    </div>
+
+    ${modals}
+    ${champBanner}
+  </div>`;
+}
+
+// ─── ESCAPE HTML ──────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── KEYBOARD SHORTCUTS ───────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==='z') { e.preventDefault(); undoLastAction(); }
+  if ((e.ctrlKey||e.metaKey) && e.key==='p') { e.preventDefault(); window.print(); }
+  if ((e.ctrlKey||e.metaKey) && e.key==='e') { e.preventDefault(); if(state.bracket) exportTXT(); }
+  // Close export dropdown on Escape
+  if (e.key==='Escape') { state.showExportDropdown=false; state.showResetModal=false; render(); }
+});
+
+// Close export dropdown on outside click
+document.addEventListener('click', e => {
+  if (state.showExportDropdown && !e.target.closest('[onclick="toggleExportDropdown()"]') && !e.target.closest('.z-50')) {
+    state.showExportDropdown = false; render();
+  }
+});
+
+render();
+</script>
+</body>
+</html>
